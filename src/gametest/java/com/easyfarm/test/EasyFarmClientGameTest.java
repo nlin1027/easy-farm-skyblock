@@ -2,6 +2,8 @@ package com.easyfarm.test;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -9,6 +11,7 @@ import org.lwjgl.glfw.GLFW;
 
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.components.events.GuiEventListener;
 import net.minecraft.client.gui.components.tabs.TabNavigationBar;
 import net.minecraft.client.gui.screens.ChatScreen;
@@ -27,6 +30,12 @@ import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
 import net.fabricmc.fabric.api.client.screen.v1.Screens;
 
 import com.easyfarm.gui.EasyFarmScreen;
+import com.easyfarm.gui.loop.LoopBuilderWidget;
+import com.easyfarm.gui.loop.LoopEditorScreen;
+import com.easyfarm.loop.Loop;
+import com.easyfarm.loop.LoopPlayer;
+import com.easyfarm.loop.LoopSettings;
+import com.easyfarm.loop.LoopStore;
 import com.easyfarm.recording.MovementKey;
 import com.easyfarm.recording.Recorder;
 import com.easyfarm.recording.Recording;
@@ -55,6 +64,11 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 			recordsMovementAndSaves(context);
 			stoppingWithoutMovementSavesNothing(context);
 			deletesRecording(context);
+
+			createTestRecordings(context);
+			editorBuildsLoop(context);
+			buffersAreRolledEveryTime(context);
+			holdLeftClickToRun(context);
 
 			world.getServer().runCommand("gamemode creative @a");
 			context.waitFor(client -> client.gameMode != null && client.gameMode.getPlayerMode() == GameType.CREATIVE);
@@ -208,6 +222,227 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 
 		context.getInput().pressKey(GLFW.GLFW_KEY_ESCAPE);
 		context.waitFor(client -> client.gui.screen() == null);
+	}
+
+	/** Two short recordings written straight to disk: "Forward" (W for 6 ticks) and "Left" (A for 4 ticks). */
+	private static void createTestRecordings(ClientGameTestContext context) {
+		clearRecordings(context);
+		context.runOnClient(client -> {
+			try {
+				for (Loop loop : LoopStore.list()) {
+					LoopStore.delete(loop);
+				}
+				// Saved oldest first; the palette lists newest first, so "Recording 2" (left) is row 0.
+				RecordingStore.saveNew(Instant.parse("2026-01-01T00:00:00Z"), 6,
+						List.of(new Recording.Event(0, MovementKey.FORWARD, true), new Recording.Event(6, MovementKey.FORWARD, false)));
+				RecordingStore.saveNew(Instant.parse("2026-01-01T00:01:00Z"), 4,
+						List.of(new Recording.Event(0, MovementKey.LEFT, true), new Recording.Event(4, MovementKey.LEFT, false)));
+			} catch (IOException e) {
+				throw new UncheckedIOException(e);
+			}
+		});
+	}
+
+	/** Click both recordings in, drag the second above the first, check validation, then save. */
+	private static void editorBuildsLoop(ClientGameTestContext context) {
+		runChatCommand(context, "ef");
+		context.waitForScreen(EasyFarmScreen.class);
+		switchTabWithKeyboard(context, GLFW.GLFW_KEY_3);
+		context.takeScreenshot("loops-1-empty");
+		clickButton(context, "New loop");
+		context.waitForScreen(LoopEditorScreen.class);
+		context.waitTicks(2);
+		context.takeScreenshot("loops-2-editor-empty");
+
+		List<String> ids = context.computeOnClient(client -> RecordingStore.list().stream().map(Recording::id).toList());
+		String left = ids.get(0);
+		String forward = ids.get(1);
+
+		clickAtGuiPosition(context, builderPoint(context, b -> b.paletteRowCenter(0)));
+		context.waitTicks(2);
+		clickAtGuiPosition(context, builderPoint(context, b -> b.paletteRowCenter(1)));
+		context.waitTicks(2);
+		check(editorSequence(context).equals(List.of(left, forward)), "Clicking palette rows should append: " + editorSequence(context));
+
+		// Drag block 2 (forward) into the gap above block 1.
+		drag(context, builderPoint(context, b -> b.blockCenter(1)), builderPoint(context, b -> b.gapPoint(0)));
+		check(editorSequence(context).equals(List.of(forward, left)), "Dragging should reorder: " + editorSequence(context));
+
+		// Add a third block by dragging from the palette, then remove it with its ×.
+		drag(context, builderPoint(context, b -> b.paletteRowCenter(0)), builderPoint(context, b -> b.gapPoint(2)));
+		check(editorSequence(context).size() == 3, "Dragging from the palette should add a block: " + editorSequence(context));
+		clickAtGuiPosition(context, builderPoint(context, b -> b.removeButtonCenter(2)));
+		context.waitTicks(2);
+		check(editorSequence(context).equals(List.of(forward, left)), "× should remove the block: " + editorSequence(context));
+
+		// Equal bounds would make the buffer fixed, which is never allowed.
+		setBufferRange(context, "0.5", "0.5");
+		clickButton(context, "Save loop");
+		context.waitTicks(2);
+		check(currentScreen(context) instanceof LoopEditorScreen, "A loop with min == max must not save");
+		context.takeScreenshot("loops-3-editor-range-error");
+
+		setBufferRange(context, "0.05", "0.5");
+		context.waitTicks(2);
+		context.takeScreenshot("loops-4-editor-filled");
+		clickButton(context, "Save loop");
+		context.waitForScreen(EasyFarmScreen.class);
+		context.waitTicks(2);
+		context.takeScreenshot("loops-5-saved");
+
+		List<Loop> loops = context.computeOnClient(client -> LoopStore.list());
+		check(loops.size() == 1, "Expected 1 saved loop, found " + loops.size());
+		Loop loop = loops.getFirst();
+		check(loop.recordingIds().equals(List.of(forward, left)), "Saved order is wrong: " + loop.recordingIds());
+		check(loop.bufferMinTicks() == 1 && loop.bufferMaxTicks() == 10,
+				"Buffer should be 1..10 ticks, was " + loop.bufferMinTicks() + ".." + loop.bufferMaxTicks());
+	}
+
+	/**
+	 * Run the loop for many cycles: every buffer (between recordings and at the end) must get its own roll inside the
+	 * range, and the rolls must actually vary. Then stop with F9 and check no key is left held.
+	 */
+	private static void buffersAreRolledEveryTime(ClientGameTestContext context) {
+		context.runOnClient(client -> LoopSettings.setHoldAttackToRun(false));
+		context.runOnClient(client -> ((EasyFarmScreen) client.gui.screen()).refresh());
+		context.waitTicks(2);
+		clickButton(context, "Start");
+		context.waitFor(client -> client.gui.screen() == null);
+		check(context.computeOnClient(client -> LoopPlayer.isRunning()), "Clicking Start did not start the loop");
+
+		List<Integer> rolls = new ArrayList<>();
+		int endBuffers = 0;
+		int middleBuffers = 0;
+		boolean sawForward = false;
+		boolean sawLeft = false;
+		int lastRollCount = 0;
+		for (int tick = 0; tick < 600 && rolls.size() < 24; tick++) {
+			context.waitTick();
+			Object[] state = context.computeOnClient(client -> new Object[] {
+					LoopPlayer.buffersRolled(), LoopPlayer.currentBufferTicks(), LoopPlayer.describePosition().getString(),
+					client.options.keyUp.isDown(), client.options.keyLeft.isDown()});
+			sawForward |= (boolean) state[3];
+			sawLeft |= (boolean) state[4];
+			int rollCount = (int) state[0];
+			if (rollCount != lastRollCount) {
+				check(rollCount == lastRollCount + 1, "Buffers were skipped or double-rolled: " + lastRollCount + " -> " + rollCount);
+				lastRollCount = rollCount;
+				rolls.add((int) state[1]);
+				if (((String) state[2]).startsWith("end buffer")) {
+					endBuffers++;
+				} else {
+					middleBuffers++;
+				}
+			}
+		}
+		context.takeScreenshot("loops-6-playing");
+
+		check(rolls.size() >= 24, "Too few buffers in 600 ticks: " + rolls.size());
+		check(rolls.stream().allMatch(ticks -> ticks >= 1 && ticks <= 10), "A buffer was rolled outside 1..10 ticks: " + rolls);
+		check(rolls.stream().distinct().count() >= 4, "Buffers are not random enough: " + rolls);
+		check(endBuffers >= 10 && middleBuffers >= 10, "Expected both middle and end buffers: " + middleBuffers + " middle, " + endBuffers + " end");
+		check(sawForward && sawLeft, "Playback never pressed the recorded keys (forward " + sawForward + ", left " + sawLeft + ")");
+
+		context.getInput().pressKey(GLFW.GLFW_KEY_F9);
+		context.waitFor(client -> !LoopPlayer.isRunning());
+		context.waitTick();
+		boolean anyHeld = context.computeOnClient(client -> client.options.keyUp.isDown() || client.options.keyLeft.isDown());
+		check(!anyHeld, "Stopping the loop left a movement key held");
+	}
+
+	/** With the setting on, the loop only advances while attack is held, and resumes in place after a release. */
+	private static void holdLeftClickToRun(ClientGameTestContext context) {
+		context.runOnClient(client -> LoopSettings.setHoldAttackToRun(true));
+		context.getInput().pressKey(GLFW.GLFW_KEY_F9);
+		context.waitFor(client -> LoopPlayer.isRunning());
+		context.waitTicks(10);
+		check(context.computeOnClient(client -> LoopPlayer.isWaitingForAttack() && LoopPlayer.buffersRolled() == 0
+				&& !client.options.keyUp.isDown()), "Without left click the loop must stay paused at the start");
+
+		context.getInput().holdMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
+		context.waitTicks(30);
+		int rolledWhileHeld = context.computeOnClient(client -> LoopPlayer.buffersRolled());
+		check(rolledWhileHeld > 0, "Holding left click did not run the loop");
+
+		context.getInput().releaseMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
+		context.waitTicks(2);
+		String pausedAt = context.computeOnClient(client -> LoopPlayer.buffersRolled() + "/" + LoopPlayer.describePosition().getString());
+		check(context.computeOnClient(client -> LoopPlayer.isWaitingForAttack()), "Releasing left click should pause the loop");
+		check(!context.computeOnClient(client -> client.options.keyUp.isDown() || client.options.keyLeft.isDown()),
+				"Pausing must let go of the movement keys");
+		context.waitTicks(20);
+		String stillAt = context.computeOnClient(client -> LoopPlayer.buffersRolled() + "/" + LoopPlayer.describePosition().getString());
+		check(pausedAt.equals(stillAt), "The loop moved on while paused: " + pausedAt + " -> " + stillAt);
+
+		context.getInput().holdMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
+		context.waitTicks(30);
+		context.getInput().releaseMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
+		check(context.computeOnClient(client -> LoopPlayer.buffersRolled()) > rolledWhileHeld, "The loop did not resume");
+
+		context.getInput().pressKey(GLFW.GLFW_KEY_F9);
+		context.waitFor(client -> !LoopPlayer.isRunning());
+		context.runOnClient(client -> LoopSettings.setHoldAttackToRun(true));
+	}
+
+	private static LoopBuilderWidget builder(Screen screen) {
+		for (AbstractWidget widget : Screens.getWidgets(screen)) {
+			if (widget instanceof LoopBuilderWidget builder) {
+				return builder;
+			}
+		}
+		throw new AssertionError("No loop builder on " + screen.getClass().getSimpleName());
+	}
+
+	private static int[] builderPoint(ClientGameTestContext context, java.util.function.Function<LoopBuilderWidget, int[]> point) {
+		return context.computeOnClient(client -> point.apply(builder(client.gui.screen())));
+	}
+
+	@SuppressWarnings("unchecked")
+	private static List<String> editorSequence(ClientGameTestContext context) {
+		return context.computeOnClient(client -> {
+			try {
+				java.lang.reflect.Field field = LoopEditorScreen.class.getDeclaredField("sequence");
+				field.setAccessible(true);
+				return List.copyOf((List<String>) field.get(client.gui.screen()));
+			} catch (ReflectiveOperationException e) {
+				throw new AssertionError(e);
+			}
+		});
+	}
+
+	/** The editor's two seconds boxes are the 2nd and 3rd edit boxes (after the name). */
+	private static void setBufferRange(ClientGameTestContext context, String min, String max) {
+		context.runOnClient(client -> {
+			List<EditBox> boxes = new ArrayList<>();
+			for (AbstractWidget widget : Screens.getWidgets(client.gui.screen())) {
+				if (widget instanceof EditBox box) {
+					boxes.add(box);
+				}
+			}
+			boxes.get(1).setValue(min);
+			boxes.get(2).setValue(max);
+		});
+	}
+
+	private static void drag(ClientGameTestContext context, int[] from, int[] to) {
+		int scale = context.computeOnClient(client -> client.getWindow().getGuiScale());
+		context.getInput().setCursorPos((from[0] + 0.5) * scale, (from[1] + 0.5) * scale);
+		context.waitTick();
+		context.getInput().holdMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
+		context.waitTick();
+		// Move in steps so the widget sees a real drag, then let go over the target.
+		for (int step = 1; step <= 5; step++) {
+			double x = from[0] + (to[0] - from[0]) * step / 5.0;
+			double y = from[1] + (to[1] - from[1]) * step / 5.0;
+			context.getInput().setCursorPos((x + 0.5) * scale, (y + 0.5) * scale);
+			context.waitTick();
+		}
+		context.getInput().releaseMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
+		context.waitTicks(2);
+	}
+
+	private static void clickAtGuiPosition(ClientGameTestContext context, int[] point) {
+		clickAtGuiPosition(context, point[0], point[1]);
 	}
 
 	private static void clickButton(ClientGameTestContext context, String label) {

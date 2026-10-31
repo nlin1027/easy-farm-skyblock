@@ -4,6 +4,7 @@ import net.fabricmc.api.ClientModInitializer;
 
 import com.easyfarm.command.EasyFarmCommand;
 import com.easyfarm.gui.InventoryButton;
+import com.easyfarm.loop.LoopPlayer;
 import com.easyfarm.recording.Recorder;
 
 /**
@@ -18,5 +19,6 @@ public final class EasyFarmClient implements ClientModInitializer {
 		EasyFarmCommand.register();
 		InventoryButton.register();
 		Recorder.register();
+		LoopPlayer.register();
 	}
 }

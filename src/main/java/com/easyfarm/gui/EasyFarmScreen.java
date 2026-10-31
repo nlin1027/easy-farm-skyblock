@@ -20,6 +20,7 @@ import com.easyfarm.gui.tab.HudTab;
 import com.easyfarm.gui.tab.LoopsTab;
 import com.easyfarm.gui.tab.RecordTab;
 import com.easyfarm.gui.tab.RecordingsTab;
+import com.easyfarm.loop.LoopPlayer;
 import com.easyfarm.recording.Recorder;
 import com.easyfarm.recording.Recording;
 
@@ -92,7 +93,7 @@ public class EasyFarmScreen extends Screen {
 		this.panelTop = (this.height - this.panelHeight) / 2;
 
 		// Tabs are views, so they are rebuilt on every init (resize) and the selection is restored by index.
-		this.tabs = List.of(new RecordTab(this), new RecordingsTab(this), new LoopsTab());
+		this.tabs = List.of(new RecordTab(this), new RecordingsTab(this), new LoopsTab(this));
 
 		int innerWidth = this.panelWidth - 2 * PADDING;
 		int tabWidth = innerWidth / this.tabs.size();
@@ -185,15 +186,18 @@ public class EasyFarmScreen extends Screen {
 		int textY = this.panelTop + 7;
 		graphics.text(this.font, this.title, this.panelLeft + PADDING, textY, HudStyle.TEXT, true);
 
-		// Looping will add its own state here once that feature exists.
 		boolean recording = Recorder.isRecording();
+		boolean looping = !recording && LoopPlayer.isRunning();
 		Component status = recording
 				? Component.translatable("easyfarm.status.recording", Recording.formatDuration(Recorder.elapsedTicks()))
-				: Component.translatable("easyfarm.status.idle");
+				: looping
+						? Component.translatable("easyfarm.status.looping")
+						: Component.translatable("easyfarm.status.idle");
 		int statusX = this.panelLeft + this.panelWidth - PADDING - this.font.width(status);
-		graphics.text(this.font, status, statusX, textY, recording ? HudStyle.TEXT : HudStyle.TEXT_MUTED, false);
+		graphics.text(this.font, status, statusX, textY, recording || looping ? HudStyle.TEXT : HudStyle.TEXT_MUTED, false);
 		int dotX = statusX - STATUS_DOT_SIZE - 4;
 		int dotY = textY + (this.font.lineHeight - STATUS_DOT_SIZE) / 2;
-		graphics.fill(dotX, dotY, dotX + STATUS_DOT_SIZE, dotY + STATUS_DOT_SIZE, recording ? HudStyle.STATUS_RECORDING : HudStyle.STATUS_IDLE);
+		int dotColor = recording ? HudStyle.STATUS_RECORDING : looping ? HudStyle.ACCENT : HudStyle.STATUS_IDLE;
+		graphics.fill(dotX, dotY, dotX + STATUS_DOT_SIZE, dotY + STATUS_DOT_SIZE, dotColor);
 	}
 }
