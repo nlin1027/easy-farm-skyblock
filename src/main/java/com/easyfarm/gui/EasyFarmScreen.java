@@ -73,6 +73,11 @@ public class EasyFarmScreen extends Screen {
 	 * after running the command, so opening the HUD synchronously would have chat close it again immediately.
 	 */
 	public static void open() {
+		open(-1);
+	}
+
+	/** Like {@link #open()}, but starts on the given tab ({@code TAB_*}); -1 keeps the default. */
+	public static void open(int tab) {
 		Minecraft minecraft = Minecraft.getInstance();
 		minecraft.schedule(() -> {
 			Screen current = minecraft.gui.screen();
@@ -81,7 +86,12 @@ public class EasyFarmScreen extends Screen {
 			}
 
 			// Closing the HUD should drop back to the inventory it was opened from, but not to a leftover chat box.
-			minecraft.gui.setScreen(new EasyFarmScreen(current instanceof ChatScreen ? null : current));
+			EasyFarmScreen screen = new EasyFarmScreen(current instanceof ChatScreen ? null : current);
+			minecraft.gui.setScreen(screen);
+			if (tab >= 0) {
+				// After setScreen: building the tab bar during init resets the selection to the first tab.
+				screen.showTab(tab);
+			}
 		});
 	}
 
