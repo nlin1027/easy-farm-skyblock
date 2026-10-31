@@ -1,0 +1,25 @@
+{
+  "easyfarm.title": "Easy Farm",
+  "easyfarm.button.open": "EF",
+  "easyfarm.button.open.tooltip": "Open the Easy Farm HUD (/ef)",
+  "easyfarm.coming_soon": "Coming soon",
+
+  "easyfarm.status.idle": "Idle",
+
+  "easyfarm.tab.record": "Record",
+  "easyfarm.tab.recordings": "Recordings",
+  "easyfarm.tab.loops": "Loops",
+
+  "easyfarm.record.heading": "Record keystrokes",
+  "easyfarm.record.description": "Capture the keys you press so they can be replayed later.",
+  "easyfarm.record.start": "Start recording",
+
+  "easyfarm.recordings.heading": "Saved recordings",
+  "easyfarm.recordings.empty": "No recordings yet.",
+  "easyfarm.recordings.empty_hint": "Record something in the Record tab and it will show up here.",
+
+  "easyfarm.loops.heading": "Loops",
+  "easyfarm.loops.empty": "No loop is running.",
+  "easyfarm.loops.empty_hint": "Pick a recording to put it on loop.",
+  "easyfarm.loops.start": "Start loop"
+}

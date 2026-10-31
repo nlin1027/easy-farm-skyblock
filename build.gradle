@@ -1,0 +1,73 @@
+plugins {
+	id 'net.fabricmc.fabric-loom' version "${loom_version}"
+	id 'maven-publish'
+}
+
+version = "${project.mod_version}+mc${project.minecraft_version}"
+group = project.maven_group
+
+base {
+	archivesName = project.archives_base_name
+}
+
+// Easy Farm is a client-only mod, so there is no need for the main/client source set split.
+// Everything lives in src/main and fabric.mod.json declares "environment": "client".
+loom {
+	accessWidenerPath = file("src/main/resources/easyfarm.classtweaker")
+
+	mods {
+		"easyfarm" {
+			sourceSet sourceSets.main
+		}
+	}
+}
+
+// Client game tests live in src/gametest, a separate source set, so they never end up in the released jar.
+// Run them with: ./gradlew runClientGameTest
+fabricApi {
+	configureTests {
+		createSourceSet = true
+		modId = "easyfarm-test"
+		enableGameTests = false
+		enableClientGameTests = true
+	}
+}
+
+dependencies {
+	// To change the versions see the gradle.properties file
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+
+	// Fabric API provides the client command, screen and key mapping hooks.
+	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+}
+
+processResources {
+	def version = project.version
+	inputs.property "version", version
+
+	filesMatching("fabric.mod.json") {
+		expand "version": version
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.release = 25
+}
+
+java {
+	// Generates a -sources jar next to the mod jar (Modrinth lets you upload it alongside).
+	withSourcesJar()
+
+	sourceCompatibility = JavaVersion.VERSION_25
+	targetCompatibility = JavaVersion.VERSION_25
+}
+
+jar {
+	def projectName = project.name
+	inputs.property "projectName", projectName
+
+	from("LICENSE") {
+		rename { "${it}_$projectName" }
+	}
+}
