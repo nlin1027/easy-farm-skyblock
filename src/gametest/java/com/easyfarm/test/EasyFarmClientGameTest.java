@@ -1,5 +1,7 @@
 package com.easyfarm.test;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -25,6 +27,10 @@ import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
 import net.fabricmc.fabric.api.client.screen.v1.Screens;
 
 import com.easyfarm.gui.EasyFarmScreen;
+import com.easyfarm.recording.MovementKey;
+import com.easyfarm.recording.Recorder;
+import com.easyfarm.recording.Recording;
+import com.easyfarm.recording.RecordingStore;
 
 /**
  * Drives the real client: opens the HUD with {@code /ef} and with the inventory button (creative and survival),
@@ -44,6 +50,11 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 
 			commandsStayLocal(context);
 			commandOpensHud(context);
+
+			clearRecordings(context);
+			recordsMovementAndSaves(context);
+			stoppingWithoutMovementSavesNothing(context);
+			deletesRecording(context);
 
 			world.getServer().runCommand("gamemode creative @a");
 			context.waitFor(client -> client.gameMode != null && client.gameMode.getPlayerMode() == GameType.CREATIVE);
@@ -99,6 +110,118 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 		// Opened from chat, so closing returns to the game rather than to a leftover chat box.
 		context.getInput().pressKey(GLFW.GLFW_KEY_ESCAPE);
 		context.waitFor(client -> client.gui.screen() == null);
+	}
+
+	private static void clearRecordings(ClientGameTestContext context) {
+		context.runOnClient(client -> {
+			for (Recording recording : RecordingStore.list()) {
+				try {
+					RecordingStore.delete(recording);
+				} catch (IOException e) {
+					throw new UncheckedIOException(e);
+				}
+			}
+		});
+	}
+
+	/**
+	 * Start from the Record tab, walk forward and jump, stop with the hotkey: one recording must be saved with both keys,
+	 * every press matched by a release, and it must show up on the Recordings tab.
+	 */
+	private static void recordsMovementAndSaves(ClientGameTestContext context) {
+		runChatCommand(context, "ef");
+		context.waitForScreen(EasyFarmScreen.class);
+		context.waitTicks(5);
+		context.takeScreenshot("record-1-idle");
+
+		clickButton(context, "Start recording");
+		context.waitFor(client -> client.gui.screen() == null);
+		check(context.computeOnClient(client -> Recorder.isRecording()), "Clicking 'Start recording' did not start recording");
+
+		context.getInput().holdKeyFor(options -> options.keyUp, 20);
+		context.getInput().holdKeyFor(options -> options.keyJump, 5);
+		context.waitTicks(10);
+
+		context.getInput().pressKey(GLFW.GLFW_KEY_F8);
+		context.waitFor(client -> !Recorder.isRecording());
+
+		List<Recording> recordings = context.computeOnClient(client -> RecordingStore.list());
+		check(recordings.size() == 1, "Expected 1 saved recording, found " + recordings.size());
+		Recording recording = recordings.getFirst();
+		check(recording.keysUsed().containsAll(List.of(MovementKey.FORWARD, MovementKey.JUMP)),
+				"The recording should contain forward and jump, but has " + recording.keysUsed());
+		check(recording.lengthTicks() >= 30, "The recording is too short: " + recording.lengthTicks() + " ticks");
+		long presses = recording.events().stream().filter(Recording.Event::down).count();
+		long releases = recording.events().size() - presses;
+		check(presses == releases, "Every press needs a release: " + presses + " presses, " + releases + " releases");
+
+		runChatCommand(context, "ef");
+		context.waitForScreen(EasyFarmScreen.class);
+		switchTabWithKeyboard(context, GLFW.GLFW_KEY_2);
+		context.takeScreenshot("record-2-saved-in-recordings-tab");
+		context.getInput().pressKey(GLFW.GLFW_KEY_ESCAPE);
+		context.waitFor(client -> client.gui.screen() == null);
+	}
+
+	/** Start with the hotkey, open the HUD (which pauses recording) and stop without moving: nothing may be saved. */
+	private static void stoppingWithoutMovementSavesNothing(ClientGameTestContext context) {
+		context.getInput().pressKey(GLFW.GLFW_KEY_F8);
+		context.waitFor(client -> Recorder.isRecording());
+		context.waitTicks(10);
+
+		runChatCommand(context, "ef");
+		context.waitForScreen(EasyFarmScreen.class);
+		context.waitTicks(5);
+		check(selectedTab(context) == EasyFarmScreen.TAB_RECORD, "The HUD should open on the Record tab");
+		context.takeScreenshot("record-3-recording-in-progress");
+
+		clickButton(context, "Stop and save");
+		context.waitFor(client -> !Recorder.isRecording());
+		context.waitTicks(5);
+		context.takeScreenshot("record-4-nothing-saved");
+		check(selectedTab(context) == EasyFarmScreen.TAB_RECORD, "An empty recording should leave the HUD on the Record tab");
+		int count = context.computeOnClient(client -> RecordingStore.list().size());
+		check(count == 1, "An empty recording was saved anyway: " + count + " recordings");
+	}
+
+	/** Select the recording, then Delete twice (the first click only arms the button). */
+	private static void deletesRecording(ClientGameTestContext context) {
+		switchTabWithKeyboard(context, GLFW.GLFW_KEY_2);
+		int[] firstRow = context.computeOnClient(client -> {
+			for (GuiEventListener child : client.gui.screen().children()) {
+				if (child instanceof AbstractWidget widget && widget.getClass().getSimpleName().equals("RecordingList")) {
+					return new int[] {widget.getX() + 40, widget.getY() + 12};
+				}
+			}
+			throw new AssertionError("The Recordings tab has no list");
+		});
+		clickAtGuiPosition(context, firstRow[0], firstRow[1]);
+		context.waitTicks(2);
+
+		clickButton(context, "Delete");
+		context.waitTicks(2);
+		check(context.computeOnClient(client -> RecordingStore.list().size()) == 1, "One click on Delete must not delete yet");
+		clickButton(context, "Click again to delete");
+		context.waitTicks(5);
+		context.takeScreenshot("record-5-after-delete");
+		check(context.computeOnClient(client -> RecordingStore.list().isEmpty()), "The recording was not deleted");
+
+		context.getInput().pressKey(GLFW.GLFW_KEY_ESCAPE);
+		context.waitFor(client -> client.gui.screen() == null);
+	}
+
+	private static void clickButton(ClientGameTestContext context, String label) {
+		int[] center = context.computeOnClient(client -> {
+			for (AbstractWidget widget : Screens.getWidgets(client.gui.screen())) {
+				if (widget instanceof Button button && button.visible && button.getMessage().getString().equals(label)) {
+					check(button.active, "Button '" + label + "' is disabled");
+					return new int[] {button.getX() + button.getWidth() / 2, button.getY() + button.getHeight() / 2};
+				}
+			}
+			throw new AssertionError("No '" + label + "' button on " + client.gui.screen().getClass().getSimpleName());
+		});
+		clickAtGuiPosition(context, center[0], center[1]);
+		context.waitTick();
 	}
 
 	private static void inventoryButtonOpensHud(ClientGameTestContext context, String label, Class<? extends Screen> inventoryClass) {

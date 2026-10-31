@@ -20,6 +20,8 @@ import com.easyfarm.gui.tab.HudTab;
 import com.easyfarm.gui.tab.LoopsTab;
 import com.easyfarm.gui.tab.RecordTab;
 import com.easyfarm.gui.tab.RecordingsTab;
+import com.easyfarm.recording.Recorder;
+import com.easyfarm.recording.Recording;
 
 /**
  * The Easy Farm HUD: a floating panel with a tab per feature (record, review, loop).
@@ -27,8 +29,12 @@ import com.easyfarm.gui.tab.RecordingsTab;
  * <p>It is a plain client-side screen. It does not pause the game, so a recording or loop keeps running while it is open.
  */
 public class EasyFarmScreen extends Screen {
+	public static final int TAB_RECORD = 0;
+	public static final int TAB_RECORDINGS = 1;
+	public static final int TAB_LOOPS = 2;
+
 	private static final int PANEL_WIDTH = 320;
-	private static final int PANEL_HEIGHT = 200;
+	private static final int PANEL_HEIGHT = 240;
 	private static final int PANEL_MARGIN = 10;
 	private static final int PADDING = 8;
 	private static final int HEADER_HEIGHT = 22;
@@ -86,7 +92,7 @@ public class EasyFarmScreen extends Screen {
 		this.panelTop = (this.height - this.panelHeight) / 2;
 
 		// Tabs are views, so they are rebuilt on every init (resize) and the selection is restored by index.
-		this.tabs = List.of(new RecordTab(), new RecordingsTab(), new LoopsTab());
+		this.tabs = List.of(new RecordTab(this), new RecordingsTab(this), new LoopsTab());
 
 		int innerWidth = this.panelWidth - 2 * PADDING;
 		int tabWidth = innerWidth / this.tabs.size();
@@ -114,6 +120,17 @@ public class EasyFarmScreen extends Screen {
 	/** Index of the tab being shown (0 = Record, 1 = Recordings, 2 = Loops). */
 	public int getSelectedTab() {
 		return this.selectedTab;
+	}
+
+	/** Switches to a tab, rebuilding every tab so they all show the latest state (recordings, recorder status). */
+	public void showTab(int index) {
+		this.selectedTab = index;
+		this.rebuildWidgets();
+	}
+
+	/** Rebuilds the tabs in place after their data changed, keeping the current tab. */
+	public void refresh() {
+		this.rebuildWidgets();
 	}
 
 	/**
@@ -168,12 +185,15 @@ public class EasyFarmScreen extends Screen {
 		int textY = this.panelTop + 7;
 		graphics.text(this.font, this.title, this.panelLeft + PADDING, textY, HudStyle.TEXT, true);
 
-		// Recording and looping states will drive this indicator once those features exist.
-		Component status = Component.translatable("easyfarm.status.idle");
+		// Looping will add its own state here once that feature exists.
+		boolean recording = Recorder.isRecording();
+		Component status = recording
+				? Component.translatable("easyfarm.status.recording", Recording.formatDuration(Recorder.elapsedTicks()))
+				: Component.translatable("easyfarm.status.idle");
 		int statusX = this.panelLeft + this.panelWidth - PADDING - this.font.width(status);
-		graphics.text(this.font, status, statusX, textY, HudStyle.TEXT_MUTED, false);
+		graphics.text(this.font, status, statusX, textY, recording ? HudStyle.TEXT : HudStyle.TEXT_MUTED, false);
 		int dotX = statusX - STATUS_DOT_SIZE - 4;
 		int dotY = textY + (this.font.lineHeight - STATUS_DOT_SIZE) / 2;
-		graphics.fill(dotX, dotY, dotX + STATUS_DOT_SIZE, dotY + STATUS_DOT_SIZE, HudStyle.STATUS_IDLE);
+		graphics.fill(dotX, dotY, dotX + STATUS_DOT_SIZE, dotY + STATUS_DOT_SIZE, recording ? HudStyle.STATUS_RECORDING : HudStyle.STATUS_IDLE);
 	}
 }

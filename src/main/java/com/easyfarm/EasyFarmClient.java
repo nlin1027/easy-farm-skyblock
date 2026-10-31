@@ -4,6 +4,7 @@ import net.fabricmc.api.ClientModInitializer;
 
 import com.easyfarm.command.EasyFarmCommand;
 import com.easyfarm.gui.InventoryButton;
+import com.easyfarm.recording.Recorder;
 
 /**
  * Client entrypoint. Easy Farm is purely client-side: it never registers a network channel,
@@ -16,5 +17,6 @@ public final class EasyFarmClient implements ClientModInitializer {
 	public void onInitializeClient() {
 		EasyFarmCommand.register();
 		InventoryButton.register();
+		Recorder.register();
 	}
 }

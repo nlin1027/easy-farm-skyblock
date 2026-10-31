@@ -47,6 +47,12 @@ public abstract class HudTab implements Tab {
 				LayoutSettings::alignHorizontallyCenter);
 	}
 
+	protected Button addButton(Component label, Button.OnPress onPress) {
+		Button button = Button.builder(label, onPress).width(BUTTON_WIDTH).build();
+		this.layout.addChild(button, settings -> settings.alignHorizontallyCenter().paddingTop(6));
+		return button;
+	}
+
 	/** A button for a feature that is not built yet: visible so the layout is final, but disabled. */
 	protected void addComingSoonButton(Component label) {
 		Button button = Button.builder(label, pressed -> { })
