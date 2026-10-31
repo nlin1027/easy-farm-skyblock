@@ -15,11 +15,8 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.Locale;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,7 +38,7 @@ import net.fabricmc.loader.api.FabricLoader;
  * <pre>{@code
  * {
  *   "version": 1,
- *   "name": "Recording 1",
+ *   "name": "Wheat farm",
  *   "createdAt": "2026-10-31T14:02:11Z",
  *   "lengthTicks": 240,
  *   "events": [
@@ -58,7 +55,7 @@ public final class RecordingStore {
 	private static final int FORMAT_VERSION = 1;
 	private static final String EXTENSION = ".json";
 	private static final DateTimeFormatter ID_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss").withZone(ZoneId.systemDefault());
-	private static final Pattern DEFAULT_NAME = Pattern.compile("Recording (\\d+)");
+	public static final int MAX_NAME_LENGTH = 32;
 
 	private RecordingStore() {
 	}
@@ -92,11 +89,12 @@ public final class RecordingStore {
 	}
 
 	/**
-	 * Saves a freshly captured recording under a new id and the next free "Recording N" name.
+	 * Saves a freshly captured recording under a new id.
 	 *
+	 * @param name a name that passed {@link #checkName}
 	 * @return the recording as saved
 	 */
-	public static Recording saveNew(Instant createdAt, int lengthTicks, List<Recording.Event> events) throws IOException {
+	public static Recording saveNew(String name, Instant createdAt, int lengthTicks, List<Recording.Event> events) throws IOException {
 		Path dir = directory();
 		Files.createDirectories(dir);
 
@@ -106,33 +104,48 @@ public final class RecordingStore {
 			id = baseId + "_" + i;
 		}
 
-		Recording recording = new Recording(id, nextDefaultName(), createdAt, lengthTicks, events);
+		Recording recording = new Recording(id, name.strip(), createdAt, lengthTicks, events);
 		write(recording);
 		return recording;
 	}
 
-	public static void delete(Recording recording) throws IOException {
-		Files.deleteIfExists(directory().resolve(recording.id() + EXTENSION));
+	/** Why a recording name is not usable. */
+	public enum NameCheck {
+		OK, EMPTY, TOO_LONG, TAKEN
 	}
 
-	private static String nextDefaultName() {
-		Set<Integer> taken = new HashSet<>();
+	/** Names are trimmed, 1 to {@link #MAX_NAME_LENGTH} characters, and unique ignoring case. */
+	public static NameCheck checkName(String name) {
+		String trimmed = name.strip();
+		if (trimmed.isEmpty()) {
+			return NameCheck.EMPTY;
+		}
+		if (trimmed.length() > MAX_NAME_LENGTH) {
+			return NameCheck.TOO_LONG;
+		}
+		return find(trimmed) != null ? NameCheck.TAKEN : NameCheck.OK;
+	}
+
+	/** The recording with this name (ignoring case), or {@code null}. */
+	public static Recording find(String name) {
+		String wanted = name.strip().toLowerCase(Locale.ROOT);
 		for (Recording recording : list()) {
-			Matcher matcher = DEFAULT_NAME.matcher(recording.name());
-			if (matcher.matches()) {
-				try {
-					taken.add(Integer.parseInt(matcher.group(1)));
-				} catch (NumberFormatException ignored) {
-					// Absurdly large number; it cannot collide with anything we would pick.
-				}
+			if (recording.name().toLowerCase(Locale.ROOT).equals(wanted)) {
+				return recording;
 			}
 		}
+		return null;
+	}
 
-		int n = 1;
-		while (taken.contains(n)) {
-			n++;
-		}
-		return "Recording " + n;
+	/** Renames a recording. The new name must have passed {@link #checkName}. */
+	public static Recording rename(Recording recording, String newName) throws IOException {
+		Recording renamed = new Recording(recording.id(), newName.strip(), recording.createdAt(), recording.lengthTicks(), recording.events());
+		write(renamed);
+		return renamed;
+	}
+
+	public static void delete(Recording recording) throws IOException {
+		Files.deleteIfExists(directory().resolve(recording.id() + EXTENSION));
 	}
 
 	private static void write(Recording recording) throws IOException {

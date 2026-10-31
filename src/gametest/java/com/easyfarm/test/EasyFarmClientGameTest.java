@@ -9,6 +9,7 @@ import org.lwjgl.glfw.GLFW;
 
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.components.events.GuiEventListener;
 import net.minecraft.client.gui.components.tabs.TabNavigationBar;
 import net.minecraft.client.gui.screens.ChatScreen;
@@ -43,7 +44,12 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 
 	@Override
 	public void runTest(ClientGameTestContext context) {
-		ClientReceiveMessageEvents.GAME.register((message, overlay) -> SERVER_MESSAGES.add(message.getString()));
+		// Overlay (action bar) messages are the mod's own feedback; a rejected command shows up as a chat message.
+		ClientReceiveMessageEvents.GAME.register((message, overlay) -> {
+			if (!overlay) {
+				SERVER_MESSAGES.add(message.getString());
+			}
+		});
 
 		try (TestSingleplayerContext world = context.worldBuilder().create()) {
 			world.getConnection().waitForChunksRender();
@@ -55,6 +61,7 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 			recordsMovementAndSaves(context);
 			stoppingWithoutMovementSavesNothing(context);
 			deletesRecording(context);
+			subcommandsWork(context);
 
 			world.getServer().runCommand("gamemode creative @a");
 			context.waitFor(client -> client.gameMode != null && client.gameMode.getPlayerMode() == GameType.CREATIVE);
@@ -134,6 +141,11 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 		context.waitTicks(5);
 		context.takeScreenshot("record-1-idle");
 
+		// A name is required: the button stays disabled until one is typed.
+		check(!isButtonActive(context, "Start recording"), "'Start recording' must be disabled without a name");
+		context.takeScreenshot("record-1b-name-required");
+		typeInNameBox(context, "Wheat farm");
+		context.takeScreenshot("record-1c-named");
 		clickButton(context, "Start recording");
 		context.waitFor(client -> client.gui.screen() == null);
 		check(context.computeOnClient(client -> Recorder.isRecording()), "Clicking 'Start recording' did not start recording");
@@ -148,6 +160,7 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 		List<Recording> recordings = context.computeOnClient(client -> RecordingStore.list());
 		check(recordings.size() == 1, "Expected 1 saved recording, found " + recordings.size());
 		Recording recording = recordings.getFirst();
+		check(recording.name().equals("Wheat farm"), "The recording should be called 'Wheat farm', but is '" + recording.name() + "'");
 		check(recording.keysUsed().containsAll(List.of(MovementKey.FORWARD, MovementKey.JUMP)),
 				"The recording should contain forward and jump, but has " + recording.keysUsed());
 		check(recording.lengthTicks() >= 30, "The recording is too short: " + recording.lengthTicks() + " ticks");
@@ -165,6 +178,12 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 
 	/** Start with the hotkey, open the HUD (which pauses recording) and stop without moving: nothing may be saved. */
 	private static void stoppingWithoutMovementSavesNothing(ClientGameTestContext context) {
+		// Without a name the hotkey must not start anything.
+		context.getInput().pressKey(GLFW.GLFW_KEY_F8);
+		context.waitTicks(5);
+		check(!context.computeOnClient(client -> Recorder.isRecording()), "F8 started a recording without a name");
+
+		context.runOnClient(client -> Recorder.setDraftName("Empty run"));
 		context.getInput().pressKey(GLFW.GLFW_KEY_F8);
 		context.waitFor(client -> Recorder.isRecording());
 		context.waitTicks(10);
@@ -208,6 +227,69 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 
 		context.getInput().pressKey(GLFW.GLFW_KEY_ESCAPE);
 		context.waitFor(client -> client.gui.screen() == null);
+	}
+
+	/** Every subcommand of /ef, run through the real chat box. */
+	private static void subcommandsWork(ClientGameTestContext context) {
+		SERVER_MESSAGES.clear();
+		runChatCommand(context, "ef help");
+		context.waitTicks(10);
+		check(context.computeOnClient(client -> client.gui.screen() == null), "'/ef help' must not open a screen");
+
+		runChatCommand(context, "ef record \"Cmd run\"");
+		context.waitFor(client -> Recorder.isRecording());
+		check("Cmd run".equals(context.computeOnClient(client -> Recorder.activeName())), "Wrong name for '/ef record'");
+		context.getInput().holdKeyFor(options -> options.keyUp, 10);
+		context.waitTicks(3);
+		context.takeScreenshot("command-4-recording-from-command");
+		runChatCommand(context, "ef stop");
+		context.waitFor(client -> !Recorder.isRecording());
+		check(context.computeOnClient(client -> RecordingStore.find("cmd RUN") != null), "'/ef stop' did not save 'Cmd run'");
+
+		runChatCommand(context, "ef status");
+		runChatCommand(context, "ef list");
+		runChatCommand(context, "ef rename \"Cmd run\" Renamed");
+		context.waitTicks(5);
+		check(context.computeOnClient(client -> RecordingStore.find("Renamed") != null && RecordingStore.find("Cmd run") == null),
+				"'/ef rename' did not rename");
+		runChatCommand(context, "ef delete Renamed");
+		context.waitTicks(5);
+		check(context.computeOnClient(client -> RecordingStore.list().isEmpty()), "'/ef delete' did not delete");
+
+		runChatCommand(context, "ef open recordings");
+		context.waitForScreen(EasyFarmScreen.class);
+		context.waitTicks(5);
+		context.takeScreenshot("command-5-open-recordings");
+		check(selectedTab(context) == EasyFarmScreen.TAB_RECORDINGS, "'/ef open recordings' should show the Recordings tab");
+		context.getInput().pressKey(GLFW.GLFW_KEY_ESCAPE);
+		context.waitFor(client -> client.gui.screen() == null);
+
+		check(SERVER_MESSAGES.isEmpty(), "A subcommand was forwarded to the server: " + SERVER_MESSAGES);
+	}
+
+	private static boolean isButtonActive(ClientGameTestContext context, String label) {
+		return context.computeOnClient(client -> {
+			for (AbstractWidget widget : Screens.getWidgets(client.gui.screen())) {
+				if (widget instanceof Button button && button.getMessage().getString().equals(label)) {
+					return button.active;
+				}
+			}
+			throw new AssertionError("No '" + label + "' button");
+		});
+	}
+
+	private static void typeInNameBox(ClientGameTestContext context, String name) {
+		int[] center = context.computeOnClient(client -> {
+			for (AbstractWidget widget : Screens.getWidgets(client.gui.screen())) {
+				if (widget instanceof EditBox box) {
+					return new int[] {box.getX() + box.getWidth() / 2, box.getY() + box.getHeight() / 2};
+				}
+			}
+			throw new AssertionError("The Record tab has no name box");
+		});
+		clickAtGuiPosition(context, center[0], center[1]);
+		context.getInput().typeChars(name);
+		context.waitTicks(2);
 	}
 
 	private static void clickButton(ClientGameTestContext context, String label) {

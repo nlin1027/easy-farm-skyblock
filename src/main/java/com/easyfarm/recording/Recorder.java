@@ -49,6 +49,10 @@ public final class Recorder {
 	private static final List<Recording.Event> events = new ArrayList<>();
 	private static final boolean[] held = new boolean[KEYS.length];
 
+	private static String activeName = "";
+	/** What is typed in the Record tab's name box; survives the HUD being rebuilt or closed. */
+	private static String draftName = "";
+
 	private static @Nullable Component lastResult;
 
 	private Recorder() {
@@ -66,7 +70,10 @@ public final class Recorder {
 				if (recording) {
 					stop();
 				} else {
-					start();
+					Component error = start(draftName);
+					if (error != null && minecraft.player != null) {
+						minecraft.player.sendOverlayMessage(error);
+					}
 				}
 			}
 		}
@@ -103,21 +110,58 @@ public final class Recorder {
 		}
 	}
 
-	/** Starts a new recording. Does nothing outside a world or if one is already running. */
-	public static void start() {
+	/**
+	 * Starts a new recording under the given name.
+	 *
+	 * @return {@code null} on success, otherwise the reason nothing started
+	 */
+	public static @Nullable Component start(String name) {
 		Minecraft minecraft = Minecraft.getInstance();
-		if (recording || minecraft.player == null) {
-			return;
+		if (minecraft.player == null) {
+			return Component.translatable("easyfarm.record.error.no_world");
+		}
+		if (recording) {
+			return Component.translatable("easyfarm.record.error.already_recording", activeName);
+		}
+		Component nameError = nameError(name);
+		if (nameError != null) {
+			return nameError;
 		}
 
 		recording = true;
+		activeName = name.strip();
+		draftName = "";
 		startedAt = Instant.now();
 		tick = 0;
 		events.clear();
 		Arrays.fill(held, false);
 		lastResult = null;
 
-		minecraft.player.sendOverlayMessage(Component.translatable("easyfarm.record.overlay.started", toggleKeyName()));
+		minecraft.player.sendOverlayMessage(Component.translatable("easyfarm.record.overlay.started", activeName, toggleKeyName()));
+		return null;
+	}
+
+	/** Why this name cannot be used for a new recording, or {@code null} if it can. */
+	public static @Nullable Component nameError(String name) {
+		return switch (RecordingStore.checkName(name)) {
+			case OK -> null;
+			case EMPTY -> Component.translatable("easyfarm.record.error.name_empty");
+			case TOO_LONG -> Component.translatable("easyfarm.record.error.name_too_long", RecordingStore.MAX_NAME_LENGTH);
+			case TAKEN -> Component.translatable("easyfarm.record.error.name_taken", name.strip());
+		};
+	}
+
+	public static String draftName() {
+		return draftName;
+	}
+
+	public static void setDraftName(String name) {
+		draftName = name;
+	}
+
+	/** Name of the recording in progress (empty when idle). */
+	public static String activeName() {
+		return recording ? activeName : "";
 	}
 
 	/** The key currently bound to start/stop recording, as the player would see it in Controls. */
@@ -147,9 +191,10 @@ public final class Recorder {
 
 		if (events.isEmpty()) {
 			lastResult = Component.translatable("easyfarm.record.result.empty");
+			draftName = activeName; // let the player try again under the same name
 		} else {
 			try {
-				saved = RecordingStore.saveNew(startedAt, tick, events);
+				saved = RecordingStore.saveNew(activeName, startedAt, tick, events);
 				lastResult = Component.translatable("easyfarm.record.result.saved",
 						saved.name(), Recording.formatDuration(saved.lengthTicks()));
 			} catch (IOException e) {
