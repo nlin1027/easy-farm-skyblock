@@ -19,6 +19,7 @@ import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 
 import com.easyfarm.gui.EasyFarmScreen;
+import com.easyfarm.loop.LoopPlayer;
 import com.easyfarm.recording.Recorder;
 import com.easyfarm.recording.Recording;
 import com.easyfarm.recording.RecordingStore;
@@ -56,6 +57,7 @@ public final class EasyFarmCommand {
 			new Help("/ef list", "easyfarm.command.help.list"),
 			new Help("/ef rename <name> <new name>", "easyfarm.command.help.rename"),
 			new Help("/ef delete <name>", "easyfarm.command.help.delete"),
+			new Help("/ef loop reset", "easyfarm.command.help.loop_reset"),
 			new Help("/ef help", "easyfarm.command.help.help"));
 
 	private EasyFarmCommand() {
@@ -94,6 +96,9 @@ public final class EasyFarmCommand {
 					.then(ClientCommands.argument("name", StringArgumentType.string())
 							.suggests(RECORDING_NAMES)
 							.then(ClientCommands.argument("newName", StringArgumentType.string()).executes(EasyFarmCommand::rename))));
+
+			root.then(ClientCommands.literal("loop")
+					.then(ClientCommands.literal("reset").executes(EasyFarmCommand::loopReset)));
 
 			dispatcher.register(root);
 		});
@@ -183,6 +188,16 @@ public final class EasyFarmCommand {
 			return 0;
 		}
 		context.getSource().sendFeedback(Component.translatable("easyfarm.command.deleted", recording.name()));
+		return Command.SINGLE_SUCCESS;
+	}
+
+	/** Sends the running loop back to its first recording (the inventory's Reset button does the same). */
+	private static int loopReset(CommandContext<FabricClientCommandSource> context) {
+		if (!LoopPlayer.reset()) {
+			context.getSource().sendError(Component.translatable("easyfarm.command.error.no_loop"));
+			return 0;
+		}
+		// LoopPlayer already shows "... reset to the start" on the action bar.
 		return Command.SINGLE_SUCCESS;
 	}
 

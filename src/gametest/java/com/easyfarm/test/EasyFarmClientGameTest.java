@@ -32,6 +32,7 @@ import net.fabricmc.fabric.api.client.screen.v1.Screens;
 import com.easyfarm.gui.EasyFarmScreen;
 import com.easyfarm.gui.loop.LoopBuilderWidget;
 import com.easyfarm.gui.loop.LoopEditorScreen;
+import com.easyfarm.gui.tab.LoopList;
 import com.easyfarm.loop.Loop;
 import com.easyfarm.loop.LoopPlayer;
 import com.easyfarm.loop.LoopSettings;
@@ -84,6 +85,7 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 			context.waitFor(client -> client.gameMode != null && client.gameMode.getPlayerMode() == GameType.SURVIVAL);
 			inventoryButtonOpensHud(context, "survival", InventoryScreen.class);
 			buttonFollowsRecipeBook(context);
+			inventoryLoopButtons(context);
 		}
 	}
 
@@ -396,6 +398,112 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 		context.waitTicks(30);
 		context.getInput().releaseMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
 		check(context.computeOnClient(client -> LoopPlayer.buffersRolled()) > rolledWhileHeld, "The loop did not resume");
+
+		context.getInput().pressKey(GLFW.GLFW_KEY_F9);
+		context.waitFor(client -> !LoopPlayer.isRunning());
+		context.runOnClient(client -> LoopSettings.setHoldAttackToRun(true));
+	}
+
+	/**
+	 * Tick "show in inventory" on the loop, then from the survival inventory: its button sits left of the panel, plays it,
+	 * stops it, and the Reset button and {@code /ef loop reset} both send it back to cycle 1.
+	 */
+	private static void inventoryLoopButtons(ClientGameTestContext context) {
+		context.runOnClient(client -> LoopSettings.setHoldAttackToRun(false));
+
+		runChatCommand(context, "ef open loops");
+		context.waitForScreen(EasyFarmScreen.class);
+		context.waitTicks(5);
+		int[] checkbox = context.computeOnClient(client -> {
+			for (AbstractWidget widget : Screens.getWidgets(client.gui.screen())) {
+				if (widget instanceof LoopList list) {
+					return list.checkboxCenter(0);
+				}
+			}
+			throw new AssertionError("The Loops tab has no list");
+		});
+		clickAtGuiPosition(context, checkbox);
+		context.waitTicks(2);
+		check(context.computeOnClient(client -> LoopStore.list().getFirst().showInInventory()), "The checkmark did not save 'show in inventory'");
+		context.takeScreenshot("loops-7-show-in-inventory-checked");
+		context.getInput().pressKey(GLFW.GLFW_KEY_ESCAPE);
+		context.waitFor(client -> client.gui.screen() == null);
+
+		context.getInput().pressKey(options -> options.keyInventory);
+		context.waitForScreen(InventoryScreen.class);
+		context.waitTicks(5);
+		context.takeScreenshot("survival-5-loop-buttons-book-open");
+		// The previous test left the recipe book open, and this window is too narrow for the buttons beside it, so they
+		// fall back to the row above the panel. They must never sit on the book, which would swallow their clicks.
+		boolean clearOfBook = context.computeOnClient(client -> {
+			InventoryScreen screen = (InventoryScreen) client.gui.screen();
+			// The book is drawn at (width - 147) / 2 - 86 and its tabs stick out 30 further left.
+			int bookTabsLeft = (screen.width - 147) / 2 - 86 - 30;
+			for (AbstractWidget widget : Screens.getWidgets(screen)) {
+				String label = widget.getMessage().getString();
+				if (widget instanceof Button && (label.equals("EF") || label.equals("Reset") || label.endsWith("Loop 1"))
+						&& widget.getBottom() > screen.topPos && widget.getRight() > bookTabsLeft) {
+					return false;
+				}
+			}
+			return true;
+		});
+		check(clearOfBook, "With the recipe book open, an Easy Farm button overlaps the book");
+
+		// Close the recipe book: now everything belongs in a column left of the panel.
+		int[] recipeButton = context.computeOnClient(client -> {
+			InventoryScreen screen = (InventoryScreen) client.gui.screen();
+			return new int[] {screen.leftPos + 104 + 10, screen.height / 2 - 22 + 9};
+		});
+		clickAtGuiPosition(context, recipeButton);
+		context.waitTicks(5);
+		context.takeScreenshot("survival-6-loop-buttons-left");
+		boolean allLeft = context.computeOnClient(client -> {
+			InventoryScreen screen = (InventoryScreen) client.gui.screen();
+			for (AbstractWidget widget : Screens.getWidgets(screen)) {
+				String label = widget.getMessage().getString();
+				if (widget instanceof Button && (label.equals("EF") || label.equals("Reset") || label.endsWith("Loop 1"))
+						&& widget.getRight() > screen.leftPos) {
+					return false;
+				}
+			}
+			return true;
+		});
+		check(allLeft, "An Easy Farm button is not on the left side of the inventory");
+
+		clickButton(context, "Loop 1");
+		context.waitTicks(2);
+		check(context.computeOnClient(client -> LoopPlayer.isRunning() && "Loop 1".equals(LoopPlayer.currentLoop().name())),
+				"The inventory loop button did not select the loop");
+		context.takeScreenshot("survival-5-inventory-loop-playing");
+		clickButton(context, "▶ Loop 1");
+		context.waitTicks(2);
+		check(!context.computeOnClient(client -> LoopPlayer.isRunning()), "Clicking the playing loop's button should stop it");
+		clickButton(context, "Loop 1");
+		context.waitTicks(2);
+
+		// Let it run into a later cycle, then reset with the inventory button.
+		context.getInput().pressKey(GLFW.GLFW_KEY_ESCAPE);
+		context.waitFor(client -> client.gui.screen() == null);
+		context.waitFor(client -> LoopPlayer.cycle() >= 2);
+		context.getInput().pressKey(options -> options.keyInventory);
+		context.waitForScreen(InventoryScreen.class);
+		context.waitTicks(2);
+		check(context.computeOnClient(client -> LoopPlayer.cycle() >= 2), "The loop should be past cycle 1 before resetting");
+		clickButton(context, "Reset");
+		context.waitTicks(2);
+		check(context.computeOnClient(client -> LoopPlayer.cycle() == 1 && LoopPlayer.describePosition().getString().startsWith("Forward (1/")),
+				"Reset did not reset the loop to its first recording");
+
+		// And again with the command.
+		context.getInput().pressKey(GLFW.GLFW_KEY_ESCAPE);
+		context.waitFor(client -> client.gui.screen() == null);
+		context.waitFor(client -> LoopPlayer.cycle() >= 2);
+		SERVER_MESSAGES.clear();
+		runChatCommand(context, "ef loop reset");
+		context.waitFor(client -> client.gui.screen() == null);
+		check(context.computeOnClient(client -> LoopPlayer.cycle() == 1), "'/ef loop reset' did not reset the loop");
+		check(SERVER_MESSAGES.isEmpty(), "'/ef loop reset' was forwarded to the server: " + SERVER_MESSAGES);
 
 		context.getInput().pressKey(GLFW.GLFW_KEY_F9);
 		context.waitFor(client -> !LoopPlayer.isRunning());

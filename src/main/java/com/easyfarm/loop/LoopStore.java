@@ -45,7 +45,8 @@ import net.fabricmc.loader.api.FabricLoader;
  *   "name": "Loop 1",
  *   "createdAt": "2026-10-31T14:02:11Z",
  *   "buffer": { "minTicks": 10, "maxTicks": 40 },
- *   "recordings": [ "2026-10-31_10-22-13", "2026-10-31_10-25-40" ]
+ *   "recordings": [ "2026-10-31_10-22-13", "2026-10-31_10-25-40" ],
+ *   "showInInventory": true
  * }
  * }</pre>
  * Recordings are referenced by id, so a loop shows them as missing (and refuses to play) if one is deleted. There is
@@ -111,7 +112,7 @@ public final class LoopStore {
 			id = baseId + "_" + i;
 		}
 
-		Loop loop = new Loop(id, name, now, recordingIds, bufferMinTicks, bufferMaxTicks);
+		Loop loop = new Loop(id, name, now, recordingIds, bufferMinTicks, bufferMaxTicks, false);
 		write(loop);
 		return loop;
 	}
@@ -162,6 +163,7 @@ public final class LoopStore {
 			recordings.add(recordingId);
 		}
 		json.add("recordings", recordings);
+		json.addProperty("showInInventory", loop.showInInventory());
 
 		// Write to a temporary file first so a crash mid-write never leaves a half-written loop behind.
 		Path target = directory().resolve(loop.id() + EXTENSION);
@@ -210,6 +212,10 @@ public final class LoopStore {
 			recordingIds.add(element.getAsString());
 		}
 
-		return new Loop(id, name, createdAt, recordingIds, minTicks, maxTicks);
+		// Optional: files saved before this field existed simply are not shown in the inventory.
+		JsonElement show = json.get("showInInventory");
+		boolean showInInventory = show != null && show.getAsBoolean();
+
+		return new Loop(id, name, createdAt, recordingIds, minTicks, maxTicks, showInInventory);
 	}
 }

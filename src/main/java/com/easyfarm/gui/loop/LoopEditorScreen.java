@@ -185,7 +185,8 @@ public final class LoopEditorScreen extends Screen {
 			if (this.editing == null) {
 				saved = LoopStore.saveNew(trimmedName, this.sequence, min, max);
 			} else {
-				saved = new Loop(this.editing.id(), trimmedName, this.editing.createdAt(), this.sequence, min, max);
+				saved = new Loop(this.editing.id(), trimmedName, this.editing.createdAt(), this.sequence, min, max,
+						this.editing.showInInventory());
 				LoopStore.save(saved);
 			}
 			LoopsTab.focus(saved.id());

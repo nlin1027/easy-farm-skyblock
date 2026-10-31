@@ -266,6 +266,43 @@ public final class LoopPlayer {
 		return true;
 	}
 
+	/**
+	 * Sends the running loop back to the start of its first recording, cycle 1. Keys are released first, and any buffer
+	 * in progress is dropped; the next buffer reached is rolled fresh as always. Whether playback is paused (menu open,
+	 * waiting for left click) is left as it was.
+	 *
+	 * @return false if no loop is running
+	 */
+	public static boolean reset() {
+		if (loop == null) {
+			return false;
+		}
+		releaseAll(Minecraft.getInstance().options);
+		cycle = 1;
+		enterRecording(0);
+		overlay(Component.translatable("easyfarm.loops.overlay.reset", loop.name()));
+		return true;
+	}
+
+	/**
+	 * The inventory buttons' action: selecting the loop that is already playing stops it; selecting any other loop
+	 * switches playback to it (only one loop plays at a time).
+	 *
+	 * @return whether {@code toToggle} is playing afterwards
+	 */
+	public static boolean toggle(Loop toToggle) {
+		if (loop != null && loop.id().equals(toToggle.id())) {
+			stop();
+			return false;
+		}
+		return start(toToggle);
+	}
+
+	/** Whether this loop (by id) is the one playing. */
+	public static boolean isPlaying(Loop candidate) {
+		return loop != null && loop.id().equals(candidate.id());
+	}
+
 	/** Stops playback and releases every key it was holding. */
 	public static void stop() {
 		stop(Component.translatable("easyfarm.loops.result.stopped"));

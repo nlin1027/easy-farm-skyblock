@@ -92,7 +92,8 @@ public final class LoopsTab extends HudTab {
 			return;
 		}
 
-		this.list = this.layout.addChild(new LoopList(Minecraft.getInstance(), loops, recordingsById, selectedId, this::onSelectionChanged),
+		this.list = this.layout.addChild(new LoopList(Minecraft.getInstance(), loops, recordingsById, selectedId,
+						this::onSelectionChanged, LoopsTab::saveInventoryFlag),
 				LayoutSettings::alignHorizontallyCenter);
 
 		this.addHoldToRunSetting();
@@ -173,6 +174,15 @@ public final class LoopsTab extends HudTab {
 		}
 		if (this.startButton != null && !LoopPlayer.isRunning()) {
 			this.startButton.active = hasSelection;
+		}
+	}
+
+	/** Persists a loop's "show in inventory" checkmark; the inventory reads it the next time it opens. */
+	private static void saveInventoryFlag(Loop loop) {
+		try {
+			LoopStore.save(loop);
+		} catch (IOException e) {
+			LOGGER.error("Could not save loop {}", loop.id(), e);
 		}
 	}
 
