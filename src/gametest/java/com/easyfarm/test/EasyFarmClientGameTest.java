@@ -11,6 +11,7 @@ import org.lwjgl.glfw.GLFW;
 
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.Button;
+import com.easyfarm.skyblock.SkyblockLocation;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.components.events.GuiEventListener;
 import net.minecraft.client.gui.components.tabs.TabNavigationBar;
@@ -77,6 +78,9 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 			buffersAreRolledEveryTime(context);
 			holdLeftClickToRun(context);
 
+			gardenDetection(context);
+			SkyblockLocation.setOverride(true);
+
 			world.getServer().runCommand("gamemode creative @a");
 			context.waitFor(client -> client.gameMode != null && client.gameMode.getPlayerMode() == GameType.CREATIVE);
 			inventoryButtonOpensHud(context, "creative", CreativeModeInventoryScreen.class);
@@ -87,6 +91,30 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 			buttonFollowsRecipeBook(context);
 			inventoryLoopButtons(context);
 		}
+	}
+
+	/** Detection text rules, and the inventory buttons being hidden (but /ef still working) outside the Garden. */
+	private static void gardenDetection(ClientGameTestContext context) {
+		List<String> garden = List.of("§7⏣ §aThe Garden", "Plot: §bNone");
+		check(SkyblockLocation.isGarden("§e§lSKYBLOCK", garden, List.of()), "sidebar 'The Garden' not detected");
+		check(SkyblockLocation.isGarden("SKYBLOCK", List.of("⏣ Hub"), List.of("§bArea: §7Garden")), "tab 'Area: Garden' not detected");
+		check(!SkyblockLocation.isGarden("SKYBLOCK", List.of("⏣ Hub"), List.of("Area: Hub")), "Hub detected as Garden");
+		check(!SkyblockLocation.isGarden("Other Server", garden, List.of()), "non-SkyBlock sidebar accepted");
+		check(!context.computeOnClient(client -> SkyblockLocation.isInGarden()), "singleplayer must not count as the Garden");
+
+		context.getInput().pressKey(options -> options.keyInventory);
+		context.waitForScreen(InventoryScreen.class);
+		context.waitTicks(5);
+		check(findVisibleHudButton(context) == null, "EF button must be hidden outside the Garden");
+		context.getInput().pressKey(options -> options.keyInventory);
+		context.waitFor(client -> client.gui.screen() == null);
+	}
+
+	private static Button findVisibleHudButton(ClientGameTestContext context) {
+		return context.computeOnClient(client -> {
+			Button button = findHudButton(client.gui.screen());
+			return button != null && button.visible ? button : null;
+		});
 	}
 
 	/**

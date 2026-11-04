@@ -20,9 +20,10 @@ import net.fabricmc.fabric.api.client.screen.v1.Screens;
 import com.easyfarm.loop.Loop;
 import com.easyfarm.loop.LoopPlayer;
 import com.easyfarm.loop.LoopStore;
+import com.easyfarm.skyblock.SkyblockLocation;
 
 /**
- * Adds the "EF" button next to the player inventory (survival and creative), and next to it a reset button and one
+ * Adds the "EF" button (only while in the SkyBlock Garden, see {@link SkyblockLocation}; /ef works anywhere) next to the player inventory (survival and creative), and next to it a reset button and one
  * button per loop marked "show in inventory" in the Loops tab.
  *
  * <p>A loop button selects that loop to play (switching away from any other) or, if it is already the selected one,
@@ -89,6 +90,12 @@ public final class InventoryButton {
 
 		Button resetButton = reset;
 		Runnable update = () -> {
+			// Only usable in the Garden: elsewhere the buttons are hidden, and hidden widgets get no clicks.
+			boolean inGarden = SkyblockLocation.isInGarden();
+			hud.visible = inGarden;
+			for (Button extra : extras) {
+				extra.visible = inGarden;
+			}
 			place(hud, extras, screen);
 			if (resetButton != null) {
 				resetButton.active = LoopPlayer.isRunning();
