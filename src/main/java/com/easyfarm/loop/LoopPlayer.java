@@ -15,7 +15,6 @@ import com.mojang.blaze3d.platform.InputConstants;
 
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.Options;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
@@ -352,13 +351,13 @@ public final class LoopPlayer {
 
 	/** Plays one tick of the current step and moves on when it is done. */
 	private static void advance(Minecraft minecraft, LocalPlayer player) {
-		// Discard clicks the physical keyboard/mouse queued on the bindings playback drives, so the player's own presses
-		// do not add to the recording's. Everything else (inventory, chat, ...) is left alone, so a menu can always be opened.
-		Options options = minecraft.options;
-		for (KeyMapping mapping : List.of(options.keyAttack, options.keyUse, options.keyPickItem, options.keyJump, options.keyShift,
-				options.keySprint, options.keyUp, options.keyDown, options.keyLeft, options.keyRight)) {
-			while (mapping.consumeClick()) {
-				// drained
+		// Discard every keystroke and click the player makes while the loop plays, except the loop key itself, so only the
+		// recording's inputs reach the game. (Pausing the loop gives the keyboard back.)
+		for (KeyMapping mapping : minecraft.options.keyMappings) {
+			if (!isOwnMapping(mapping)) {
+				while (mapping.consumeClick()) {
+					// drained
+				}
 			}
 		}
 
@@ -406,7 +405,7 @@ public final class LoopPlayer {
 	/** Re-asserts the held state every tick: release everything, then press exactly what playback holds. */
 	private static void reassertKeys(Minecraft minecraft) {
 		for (KeyMapping mapping : minecraft.options.keyMappings) {
-			if (!Recorder.isOwnMapping(mapping)) {
+			if (!isOwnMapping(mapping)) {
 				mapping.setDown(false);
 			}
 		}
@@ -476,7 +475,7 @@ public final class LoopPlayer {
 	private static void releaseKeys() {
 		Minecraft minecraft = Minecraft.getInstance();
 		for (KeyMapping mapping : minecraft.options.keyMappings) {
-			if (!Recorder.isOwnMapping(mapping)) {
+			if (!isOwnMapping(mapping)) {
 				mapping.setDown(false);
 			}
 		}

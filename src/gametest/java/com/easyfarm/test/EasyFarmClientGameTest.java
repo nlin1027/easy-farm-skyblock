@@ -709,6 +709,13 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 		context.getInput().pressKey(GLFW.GLFW_KEY_ESCAPE);
 		context.waitFor(client -> client.gui.screen() == null);
 		context.waitFor(client -> LoopPlayer.cycle() >= 2);
+		// While the loop plays every keystroke except the loop key is discarded: the inventory key does nothing.
+		context.getInput().pressKey(options -> options.keyInventory);
+		context.waitTicks(5);
+		check(currentScreen(context) == null, "The inventory key must be discarded while a loop plays");
+		// Pausing with the loop key gives the keyboard back.
+		context.getInput().pressKey(GLFW.GLFW_KEY_F9);
+		context.waitTicks(3);
 		context.getInput().pressKey(options -> options.keyInventory);
 		context.waitForScreen(InventoryScreen.class);
 		context.waitTicks(2);
@@ -721,7 +728,10 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 		// And again with the command.
 		context.getInput().pressKey(GLFW.GLFW_KEY_ESCAPE);
 		context.waitFor(client -> client.gui.screen() == null);
+		context.getInput().pressKey(GLFW.GLFW_KEY_F9);
 		context.waitFor(client -> LoopPlayer.cycle() >= 2);
+		context.getInput().pressKey(GLFW.GLFW_KEY_F9);
+		context.waitTicks(3);
 		SERVER_MESSAGES.clear();
 		runChatCommand(context, "ef loop reset");
 		context.waitFor(client -> client.gui.screen() == null);
