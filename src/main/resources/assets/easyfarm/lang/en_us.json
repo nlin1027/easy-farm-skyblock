@@ -142,5 +142,7 @@
   "easyfarm.loops.editor.message.hint": "Chat text, or /command…",
   "easyfarm.loops.editor.add_message": "Add message",
   "easyfarm.loops.editor.message_block": "Say: %s",
-  "easyfarm.loops.editor.error.message": "Type a message to send (up to %s characters, no special characters)."
+  "easyfarm.loops.editor.error.message": "Type a message to send (up to %s characters, no special characters).",
+  "easyfarm.loops.result.left_garden": "Loop stopped: you are not in the Garden.",
+  "easyfarm.loops.result.not_garden": "Loops only play in the SkyBlock Garden."
 }

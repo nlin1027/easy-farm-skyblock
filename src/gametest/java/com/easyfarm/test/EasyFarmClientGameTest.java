@@ -84,6 +84,8 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 
 		try (TestSingleplayerContext world = context.worldBuilder().create()) {
 			world.getConnection().waitForChunksRender();
+			// Loops only play in the Garden; real detection is exercised in gardenDetection.
+			SkyblockLocation.setOverride(true);
 
 			commandsStayLocal(context);
 			commandOpensHud(context);
@@ -100,6 +102,7 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 			holdLeftClickToRun(context);
 			keybindPlaysAndPauses(context);
 			holdLastKeysThroughBuffer(context);
+			leavingGardenStopsLoop(context);
 			oldFilesStillLoad(context);
 
 			gardenDetection(context);
@@ -119,6 +122,7 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 
 	/** Detection text rules, and the inventory buttons being hidden (but /ef still working) outside the Garden. */
 	private static void gardenDetection(ClientGameTestContext context) {
+		SkyblockLocation.setOverride(null);
 		List<String> garden = List.of("§7⏣ §aThe Garden", "Plot: §bNone");
 		check(SkyblockLocation.isGarden("§e§lSKYBLOCK", garden, List.of()), "sidebar 'The Garden' not detected");
 		check(SkyblockLocation.isGarden("SKYBLOCK", List.of("⏣ Hub"), List.of("§bArea: §7Garden")), "tab 'Area: Garden' not detected");
@@ -586,6 +590,28 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 			} catch (IOException e) {
 				throw new UncheckedIOException(e);
 			}
+			LoopSettings.setPlayMode(LoopSettings.PlayMode.HOLD);
+		});
+	}
+
+	/** Leaving the Garden stops and unselects the loop at once, and a loop cannot start outside it. */
+	private static void leavingGardenStopsLoop(ClientGameTestContext context) {
+		context.runOnClient(client -> {
+			LoopSettings.setPlayMode(LoopSettings.PlayMode.KEYBIND);
+			LoopPlayer.start(LoopStore.list().getFirst());
+		});
+		context.waitTicks(10);
+		check(context.computeOnClient(client -> LoopPlayer.isPlaying()), "The loop should be playing in the Garden");
+		context.runOnClient(client -> SkyblockLocation.setOverride(false));
+		context.waitTicks(2);
+		check(!context.computeOnClient(client -> LoopPlayer.isRunning()), "Leaving the Garden must stop the loop");
+		check(!context.computeOnClient(client -> client.options.keyUp.isDown() || client.options.keyLeft.isDown()), "Stopping left a key held");
+		context.getInput().pressKey(GLFW.GLFW_KEY_F9);
+		context.waitTicks(3);
+		check(!context.computeOnClient(client -> LoopPlayer.isRunning()), "The loop key must not restart an unselected loop");
+		check(!context.computeOnClient(client -> LoopPlayer.start(LoopStore.list().getFirst())), "A loop must not start outside the Garden");
+		context.runOnClient(client -> {
+			SkyblockLocation.setOverride(true);
 			LoopSettings.setPlayMode(LoopSettings.PlayMode.HOLD);
 		});
 	}

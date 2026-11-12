@@ -29,6 +29,7 @@ import com.easyfarm.recording.PhysicalInput;
 import com.easyfarm.recording.Recorder;
 import com.easyfarm.recording.Recording;
 import com.easyfarm.recording.RecordingStore;
+import com.easyfarm.skyblock.SkyblockLocation;
 
 /**
  * Plays a {@link Loop}: recording, buffer, recording, buffer, ... then starts over, until stopped.
@@ -47,7 +48,7 @@ import com.easyfarm.recording.RecordingStore;
  *
  * <p><b>Starting and pausing.</b> See {@link LoopSettings.PlayMode}: a loop runs while left click is held (read from the
  * physical mouse, never the attack binding, because playback itself drives that binding), and/or while the loop key has
- * toggled it on. Opening any screen pauses playback. It stops on its own when the player leaves the world or a recording
+ * toggled it on. It only ever plays in the SkyBlock Garden, checked every tick. Opening any screen pauses playback. It stops on its own when the player leaves the world or a recording
  * starts. Everything stays on the client: only the key bindings, the player's own rotation and (temporarily, while a
  * keybind-started loop runs) the client's own "pause on lost focus" option are touched.
  */
@@ -175,6 +176,13 @@ public final class LoopPlayer {
 		LocalPlayer player = minecraft.player;
 		if (player == null) {
 			stop(Component.translatable("easyfarm.loops.result.left_world"));
+			return;
+		}
+		if (!SkyblockLocation.isInGarden()) {
+			// Checked every tick: the moment the sidebar/tab list stop saying Garden, the loop is stopped and unselected, so
+			// the loop key cannot restart it either.
+			lastLoopId = null;
+			stop(Component.translatable("easyfarm.loops.result.left_garden"));
 			return;
 		}
 		if (Recorder.isRecording()) {
@@ -522,6 +530,11 @@ public final class LoopPlayer {
 	public static boolean start(Loop toPlay) {
 		Minecraft minecraft = Minecraft.getInstance();
 		if (minecraft.player == null) {
+			return false;
+		}
+		if (!SkyblockLocation.isInGarden()) {
+			lastResult = Component.translatable("easyfarm.loops.result.not_garden");
+			overlay(lastResult);
 			return false;
 		}
 		if (Recorder.isRecording()) {
