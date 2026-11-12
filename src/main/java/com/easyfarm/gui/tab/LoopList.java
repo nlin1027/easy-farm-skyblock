@@ -129,9 +129,9 @@ public final class LoopList extends ObjectSelectionList<LoopList.Entry> {
 			} else {
 				// Average cycle: every recording plus one average buffer after each.
 				int averageBuffer = (loop.bufferMinTicks() + loop.bufferMaxTicks()) / 2;
-				int cycleTicks = totalTicks + averageBuffer * loop.recordingIds().size();
+				int cycleTicks = totalTicks + averageBuffer * loop.steps().size();
 				this.details = Component.translatable("easyfarm.loops.details",
-						loop.recordingIds().size(), loop.bufferLabel(), Recording.formatDuration(cycleTicks)).getString();
+						loop.steps().size(), loop.bufferLabel(), Recording.formatDuration(cycleTicks)).getString();
 			}
 		}
 

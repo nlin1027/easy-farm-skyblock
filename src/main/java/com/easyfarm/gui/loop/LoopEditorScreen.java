@@ -46,12 +46,15 @@ public final class LoopEditorScreen extends Screen {
 	private String name;
 	private String minText;
 	private String maxText;
+	private String messageText = "";
+	private @Nullable LoopBuilderWidget builder;
 	private @Nullable Component error;
 
 	private int left;
 	private int contentWidth;
 	private int nameRowY;
 	private int bufferRowY;
+	private int messageRowY;
 	private int bufferLabelX;
 	private int toLabelX;
 	private int secondsLabelX;
@@ -80,7 +83,8 @@ public final class LoopEditorScreen extends Screen {
 		this.left = (this.width - this.contentWidth) / 2;
 		this.nameRowY = 22;
 		this.bufferRowY = this.nameRowY + ROW_HEIGHT + 6;
-		int labelWidth = Math.max(this.font.width(Component.translatable("easyfarm.loops.editor.name")),
+		int labelWidth = Math.max(Math.max(this.font.width(Component.translatable("easyfarm.loops.editor.name")),
+				this.font.width(Component.translatable("easyfarm.loops.editor.message"))),
 				this.font.width(Component.translatable("easyfarm.loops.editor.buffer_range"))) + 6;
 
 		EditBox nameBox = new EditBox(this.font, this.left + labelWidth, this.nameRowY, this.contentWidth - labelWidth, ROW_HEIGHT,
@@ -100,9 +104,26 @@ public final class LoopEditorScreen extends Screen {
 		this.addRenderableWidget(minBox);
 		this.addRenderableWidget(maxBox);
 
-		int builderTop = this.bufferRowY + ROW_HEIGHT + 8;
+		// Message row: text to send as chat, or a command when it starts with a slash.
+		this.messageRowY = this.bufferRowY + ROW_HEIGHT + 6;
+		int addWidth = 96;
+		EditBox messageBox = new EditBox(this.font, this.left + labelWidth, this.messageRowY,
+				this.contentWidth - labelWidth - addWidth - 4, ROW_HEIGHT, Component.translatable("easyfarm.loops.editor.message"));
+		messageBox.setMaxLength(Loop.Step.MAX_MESSAGE_LENGTH);
+		messageBox.setHint(Component.translatable("easyfarm.loops.editor.message.hint"));
+		messageBox.setValue(this.messageText);
+		messageBox.setResponder(value -> {
+			this.messageText = value;
+			this.error = null;
+		});
+		this.addRenderableWidget(messageBox);
+		this.addRenderableWidget(Button.builder(Component.translatable("easyfarm.loops.editor.add_message"), button -> this.addMessage())
+				.bounds(this.left + this.contentWidth - addWidth, this.messageRowY, addWidth, ROW_HEIGHT)
+				.build());
+
+		int builderTop = this.messageRowY + ROW_HEIGHT + 8;
 		int footerTop = this.height - 38;
-		this.addRenderableWidget(new LoopBuilderWidget(this.font, this.left, builderTop, this.contentWidth, footerTop - builderTop - 4,
+		this.builder = this.addRenderableWidget(new LoopBuilderWidget(this.font, this.left, builderTop, this.contentWidth, footerTop - builderTop - 4,
 				this.recordings, this.sequence, this::currentBufferLabel, () -> this.error = null));
 
 		int buttonWidth = 100;
@@ -113,6 +134,20 @@ public final class LoopEditorScreen extends Screen {
 		this.addRenderableWidget(Button.builder(CommonComponents.GUI_CANCEL, button -> this.onClose())
 				.bounds(buttonsLeft + buttonWidth + 6, this.height - 26, buttonWidth, 20)
 				.build());
+	}
+
+	private void addMessage() {
+		if (!Loop.Step.isValidMessage(this.messageText)) {
+			this.error = Component.translatable("easyfarm.loops.editor.error.message", Loop.Step.MAX_MESSAGE_LENGTH);
+			return;
+		}
+		this.sequence.add(Loop.Step.message(this.messageText.strip()));
+		this.messageText = "";
+		this.error = null;
+		this.rebuildWidgets();
+		if (this.builder != null) {
+			this.builder.scrollToEnd();
+		}
 	}
 
 	private EditBox secondsBox(int x, String value, java.util.function.Consumer<String> responder, String narrationKey) {
@@ -231,6 +266,7 @@ public final class LoopEditorScreen extends Screen {
 
 		int labelOffset = (ROW_HEIGHT - this.font.lineHeight) / 2 + 1;
 		graphics.text(this.font, Component.translatable("easyfarm.loops.editor.name"), this.left, this.nameRowY + labelOffset, HudStyle.TEXT_MUTED, false);
+		graphics.text(this.font, Component.translatable("easyfarm.loops.editor.message"), this.left, this.messageRowY + labelOffset, HudStyle.TEXT_MUTED, false);
 		graphics.text(this.font, Component.translatable("easyfarm.loops.editor.buffer_range"), this.bufferLabelX, this.bufferRowY + labelOffset, HudStyle.TEXT_MUTED, false);
 		graphics.text(this.font, Component.translatable("easyfarm.loops.editor.to"), this.toLabelX, this.bufferRowY + labelOffset, HudStyle.TEXT_MUTED, false);
 		graphics.text(this.font, Component.translatable("easyfarm.loops.editor.seconds_hint"), this.secondsLabelX, this.bufferRowY + labelOffset, HudStyle.TEXT_MUTED, false);

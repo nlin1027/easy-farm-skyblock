@@ -49,6 +49,8 @@ public final class LoopBuilderWidget extends AbstractWidget {
 	private static final int BUFFER_COLOR = 0xFF2E2A1C;
 	private static final int BUFFER_TEXT = 0xFFE0C068;
 	private static final int REMOVE_HOVERED = 0xFFFF6060;
+	private static final int MESSAGE_COLOR = 0xFF2A3448;
+	private static final int MESSAGE_ACCENT = 0xFF6AA0FF;
 	private static final int GHOST_COLOR = 0xCC3A4F3A;
 	private static final int HOLD_ON_COLOR = 0xFF3F6F3F;
 	private static final int HOLD_OFF_COLOR = 0xFF2A2F2A;
@@ -210,7 +212,7 @@ public final class LoopBuilderWidget extends AbstractWidget {
 				this.pressSource = Source.SEQUENCE;
 				this.pressIndex = index;
 				this.pressOnRemove = event.x() >= this.sequenceRight() - PAD - REMOVE_WIDTH;
-				this.pressOnHold = !this.pressOnRemove && this.overHoldToggle(event.x());
+				this.pressOnHold = !this.pressOnRemove && !this.sequence.get(index).isMessage() && this.overHoldToggle(event.x());
 			}
 		}
 		return true;
@@ -391,6 +393,10 @@ public final class LoopBuilderWidget extends AbstractWidget {
 
 	private void extractBlock(GuiGraphicsExtractor graphics, int index, int x0, int x1, int y, boolean faded, boolean removeHovered) {
 		Loop.Step blockStep = this.sequence.get(index);
+		if (blockStep.isMessage()) {
+			this.extractMessageBlock(graphics, index, blockStep, x0, x1, y, faded, removeHovered);
+			return;
+		}
 		Recording recording = this.byId.get(blockStep.recordingId());
 		int background = recording == null ? MISSING_COLOR : BLOCK_COLOR;
 		graphics.fill(x0, y + 1, x1, y + BLOCK - 1, faded ? HudStyle.TAB_IDLE : background);
@@ -416,6 +422,24 @@ public final class LoopBuilderWidget extends AbstractWidget {
 		graphics.text(this.font, "×", x1 - REMOVE_WIDTH + 4, textY, removeHovered ? REMOVE_HOVERED : HudStyle.TEXT_MUTED, false);
 	}
 
+	/** A chat message / command block: no duration and no Hold toggle, just the text that will be sent. */
+	private void extractMessageBlock(GuiGraphicsExtractor graphics, int index, Loop.Step step, int x0, int x1, int y, boolean faded,
+			boolean removeHovered) {
+		graphics.fill(x0, y + 1, x1, y + BLOCK - 1, faded ? HudStyle.TAB_IDLE : MESSAGE_COLOR);
+		graphics.fill(x0, y + 1, x0 + 2, y + BLOCK - 1, MESSAGE_ACCENT);
+		int textY = y + (BLOCK - this.font.lineHeight) / 2 + 1;
+		String label = (index + 1) + ". " + Component.translatable("easyfarm.loops.editor.message_block", step.message()).getString();
+		label = this.font.plainSubstrByWidth(label, x1 - x0 - REMOVE_WIDTH - 14);
+		graphics.text(this.font, label, x0 + 6, textY, faded ? HudStyle.TEXT_MUTED : HudStyle.TEXT, false);
+		graphics.text(this.font, "×", x1 - REMOVE_WIDTH + 4, textY, removeHovered ? REMOVE_HOVERED : HudStyle.TEXT_MUTED, false);
+	}
+
+	/** Scrolls the loop column to its end, so a block just added is in view. */
+	public void scrollToEnd() {
+		this.sequenceScroll = Double.MAX_VALUE;
+		this.clampScroll();
+	}
+
 	private void extractBuffer(GuiGraphicsExtractor graphics, int x0, int x1, int y, boolean end, boolean holding) {
 		int inset = 10;
 		graphics.fill(x0 + inset, y + 1, x1 - inset, y + BUFFER - 1, BUFFER_COLOR);
@@ -428,8 +452,9 @@ public final class LoopBuilderWidget extends AbstractWidget {
 		String id = this.pressSource == Source.PALETTE
 				? this.available.get(this.pressIndex).id()
 				: this.sequence.get(this.pressIndex).recordingId();
+		Loop.Step ghostStep = this.pressSource == Source.SEQUENCE ? this.sequence.get(this.pressIndex) : null;
 		Recording recording = this.byId.get(id);
-		String name = recording == null ? Component.translatable("easyfarm.loops.editor.missing").getString() : recording.name();
+		String name = ghostStep != null && ghostStep.isMessage() ? ghostStep.message() : recording == null ? Component.translatable("easyfarm.loops.editor.missing").getString() : recording.name();
 
 		int width = Math.min(140, this.sequenceRight() - this.sequenceLeft() - 2 * PAD);
 		int x0 = mouseX - 12;

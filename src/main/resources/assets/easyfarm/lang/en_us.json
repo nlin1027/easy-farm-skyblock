@@ -137,5 +137,10 @@
   "easyfarm.loops.overlay.resumed": "%s resumed.",
   "easyfarm.loops.editor.hold": "Hold",
   "easyfarm.loops.editor.buffer.hold": "random buffer %s, keys held",
-  "easyfarm.loops.editor.end_buffer.hold": "end buffer %s (always), keys held"
+  "easyfarm.loops.editor.end_buffer.hold": "end buffer %s (always), keys held",
+  "easyfarm.loops.editor.message": "Message",
+  "easyfarm.loops.editor.message.hint": "Chat text, or /command…",
+  "easyfarm.loops.editor.add_message": "Add message",
+  "easyfarm.loops.editor.message_block": "Say: %s",
+  "easyfarm.loops.editor.error.message": "Type a message to send (up to %s characters, no special characters)."
 }

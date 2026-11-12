@@ -4,6 +4,8 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
 
+import org.jspecify.annotations.Nullable;
+
 import com.easyfarm.recording.Recording;
 
 /**
@@ -31,15 +33,46 @@ public record Loop(String id, String name, Instant createdAt, List<Step> steps, 
 	public static final int MAX_BUFFER_TICKS = 10 * 60 * Recording.TICKS_PER_SECOND;
 
 	/**
-	 * One recording block of a loop.
+	 * One block of a loop: either a recording, or a chat message / command to send.
 	 *
-	 * @param recordingId   the {@link Recording#id() recording} to play
+	 * @param recordingId   the {@link Recording#id() recording} to play (empty for a message block)
 	 * @param holdLastKeys  keep the keys and buttons that were still held when the recording ended pressed through the
-	 *                      random buffer that follows, until the next recording starts
+	 *                      random buffer that follows, until the next recording starts (recordings only)
+	 * @param message       for a message block, the text to send exactly as if typed in chat: a leading {@code /} makes it a
+	 *                      command. {@code null} for a recording block.
 	 */
-	public record Step(String recordingId, boolean holdLastKeys) {
+	public record Step(String recordingId, boolean holdLastKeys, @Nullable String message) {
+		public static final int MAX_MESSAGE_LENGTH = 256;
+
+		public Step(String recordingId, boolean holdLastKeys) {
+			this(recordingId, holdLastKeys, null);
+		}
+
+		public static Step message(String text) {
+			return new Step("", false, text);
+		}
+
+		public boolean isMessage() {
+			return this.message != null;
+		}
+
 		public Step withHoldLastKeys(boolean hold) {
-			return new Step(this.recordingId, hold);
+			return new Step(this.recordingId, hold, this.message);
+		}
+
+		/** Whether {@code text} can be sent as chat: not blank, short enough and free of control and section characters. */
+		public static boolean isValidMessage(String text) {
+			String trimmed = text.strip();
+			if (trimmed.isEmpty() || trimmed.equals("/") || trimmed.length() > MAX_MESSAGE_LENGTH) {
+				return false;
+			}
+			for (int i = 0; i < trimmed.length(); i++) {
+				char c = trimmed.charAt(i);
+				if (c < ' ' || c == 127 || c == '§') {
+					return false;
+				}
+			}
+			return true;
 		}
 	}
 
@@ -54,9 +87,9 @@ public record Loop(String id, String name, Instant createdAt, List<Step> steps, 
 		return new Loop(this.id, this.name, this.createdAt, this.steps, this.bufferMinTicks, this.bufferMaxTicks, show);
 	}
 
-	/** The recording ids in play order. */
+	/** The recording ids in play order (message blocks have none). */
 	public List<String> recordingIds() {
-		return this.steps.stream().map(Step::recordingId).toList();
+		return this.steps.stream().filter(step -> !step.isMessage()).map(Step::recordingId).toList();
 	}
 
 	/** Steps for these recordings, none of them holding keys through its buffer. */

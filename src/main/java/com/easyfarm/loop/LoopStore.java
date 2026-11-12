@@ -45,7 +45,7 @@ import net.fabricmc.loader.api.FabricLoader;
  *   "name": "Loop 1",
  *   "createdAt": "2026-10-31T14:02:11Z",
  *   "buffer": { "minTicks": 10, "maxTicks": 40 },
- *   "recordings": [ { "id": "2026-10-31_10-22-13", "holdLastKeys": true }, { "id": "2026-10-31_10-25-40" } ],
+ *   "recordings": [ { "id": "2026-10-31_10-22-13", "holdLastKeys": true }, { "message": "/warp garden" } ],
  *   "showInInventory": true
  * }
  * }</pre>
@@ -161,8 +161,12 @@ public final class LoopStore {
 		JsonArray recordings = new JsonArray();
 		for (Loop.Step step : loop.steps()) {
 			JsonObject entry = new JsonObject();
-			entry.addProperty("id", step.recordingId());
-			entry.addProperty("holdLastKeys", step.holdLastKeys());
+			if (step.isMessage()) {
+				entry.addProperty("message", step.message());
+			} else {
+				entry.addProperty("id", step.recordingId());
+				entry.addProperty("holdLastKeys", step.holdLastKeys());
+			}
 			recordings.add(entry);
 		}
 		json.add("recordings", recordings);
@@ -214,6 +218,14 @@ public final class LoopStore {
 		for (JsonElement element : json.getAsJsonArray("recordings")) {
 			if (element.isJsonObject()) {
 				JsonObject entry = element.getAsJsonObject();
+				if (entry.has("message")) {
+					String text = entry.get("message").getAsString();
+					if (!Loop.Step.isValidMessage(text)) {
+						throw new JsonParseException("invalid message block");
+					}
+					steps.add(Loop.Step.message(text));
+					continue;
+				}
 				JsonElement hold = entry.get("holdLastKeys");
 				steps.add(new Loop.Step(entry.get("id").getAsString(), hold != null && hold.getAsBoolean()));
 			} else {

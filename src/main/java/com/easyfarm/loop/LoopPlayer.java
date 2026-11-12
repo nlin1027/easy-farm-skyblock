@@ -66,6 +66,9 @@ public final class LoopPlayer {
 	private static @Nullable Loop loop;
 	private static List<Recording> sequence = List.of();
 	private static List<Boolean> holdFlags = List.of();
+	/** For each block, the chat message or command to send, or null for a recording. */
+	private static List<@Nullable String> messages = List.of();
+	private static boolean messageSent;
 	/** Even steps play {@code sequence.get(step / 2)}; odd steps are the buffer after it. */
 	private static int step;
 	private static int stepTick;
@@ -364,6 +367,11 @@ public final class LoopPlayer {
 		if (step % 2 == 0) {
 			Recording recording = sequence.get(step / 2);
 			boolean hold = holdFlags.get(step / 2);
+			String message = messages.get(step / 2);
+			if (message != null && !messageSent) {
+				messageSent = true;
+				sendMessage(player, message);
+			}
 			List<Recording.Event> events = recording.events();
 			while (eventCursor < events.size() && events.get(eventCursor).tick() <= stepTick) {
 				Recording.Event event = events.get(eventCursor++);
@@ -399,6 +407,20 @@ public final class LoopPlayer {
 			if (stepTick >= bufferTicks) {
 				enterRecording(step + 1);
 			}
+		}
+	}
+
+	/**
+	 * Sends a message block exactly the way the chat box does (see {@code ChatScreen#handleChatInput}): the same client
+	 * methods, so it is indistinguishable from the player typing it. Client-side commands (such as /ef) never leave the
+	 * client, as always.
+	 */
+	private static void sendMessage(LocalPlayer player, String text) {
+		String trimmed = text.strip();
+		if (trimmed.startsWith("/")) {
+			player.connection.sendCommand(trimmed.substring(1));
+		} else {
+			player.connection.sendChat(trimmed);
 		}
 	}
 
@@ -446,6 +468,7 @@ public final class LoopPlayer {
 		step = nextStep;
 		stepTick = 0;
 		eventCursor = 0;
+		messageSent = false;
 		// Whatever the buffer held is let go of here, unless the next recording presses it again on its first tick.
 		desired.clear();
 		buildCurve(sequence.get(step / 2));
@@ -518,14 +541,23 @@ public final class LoopPlayer {
 		}
 		List<Recording> resolved = new ArrayList<>();
 		List<Boolean> holds = new ArrayList<>();
+		List<@Nullable String> texts = new ArrayList<>();
 		int missing = 0;
 		for (Loop.Step loopStep : toPlay.steps()) {
+			if (loopStep.isMessage()) {
+				// A message block plays as an empty recording that sends its text on its first tick.
+				resolved.add(new Recording("", loopStep.message(), java.time.Instant.EPOCH, 0, Float.NaN, Float.NaN, List.of(), List.of()));
+				holds.add(false);
+				texts.add(loopStep.message());
+				continue;
+			}
 			Recording recording = byId.get(loopStep.recordingId());
 			if (recording == null) {
 				missing++;
 			} else {
 				resolved.add(recording);
 				holds.add(loopStep.holdLastKeys());
+				texts.add(null);
 			}
 		}
 		if (missing > 0) {
@@ -538,6 +570,7 @@ public final class LoopPlayer {
 		loop = toPlay;
 		sequence = List.copyOf(resolved);
 		holdFlags = List.copyOf(holds);
+		messages = new ArrayList<>(texts);
 		cycle = 1;
 		buffersRolled = 0;
 		lastLoopId = toPlay.id();
@@ -618,6 +651,7 @@ public final class LoopPlayer {
 		blending = false;
 		sequence = List.of();
 		holdFlags = List.of();
+		messages = List.of();
 		lastResult = reason;
 		Minecraft minecraft = Minecraft.getInstance();
 		if (focusPauseOverridden) {
