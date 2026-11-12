@@ -41,11 +41,11 @@ import net.fabricmc.loader.api.FabricLoader;
  * <p>File format (version 1):
  * <pre>{@code
  * {
- *   "version": 1,
+ *   "version": 2,
  *   "name": "Loop 1",
  *   "createdAt": "2026-10-31T14:02:11Z",
  *   "buffer": { "minTicks": 10, "maxTicks": 40 },
- *   "recordings": [ "2026-10-31_10-22-13", "2026-10-31_10-25-40" ],
+ *   "recordings": [ { "id": "2026-10-31_10-22-13", "holdLastKeys": true }, { "id": "2026-10-31_10-25-40" } ],
  *   "showInInventory": true
  * }
  * }</pre>
@@ -55,7 +55,7 @@ import net.fabricmc.loader.api.FabricLoader;
 public final class LoopStore {
 	private static final Logger LOGGER = LoggerFactory.getLogger("easyfarm");
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create();
-	private static final int FORMAT_VERSION = 1;
+	private static final int FORMAT_VERSION = 2;
 	private static final String EXTENSION = ".json";
 	private static final DateTimeFormatter ID_FORMAT = DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss").withZone(ZoneId.systemDefault());
 	private static final Pattern DEFAULT_NAME = Pattern.compile("Loop (\\d+)");
@@ -101,7 +101,7 @@ public final class LoopStore {
 	}
 
 	/** Saves a brand-new loop under a fresh id. */
-	public static Loop saveNew(String name, List<String> recordingIds, int bufferMinTicks, int bufferMaxTicks) throws IOException {
+	public static Loop saveNew(String name, List<Loop.Step> steps, int bufferMinTicks, int bufferMaxTicks) throws IOException {
 		Path dir = directory();
 		Files.createDirectories(dir);
 
@@ -112,7 +112,7 @@ public final class LoopStore {
 			id = baseId + "_" + i;
 		}
 
-		Loop loop = new Loop(id, name, now, recordingIds, bufferMinTicks, bufferMaxTicks, false);
+		Loop loop = new Loop(id, name, now, steps, bufferMinTicks, bufferMaxTicks, false);
 		write(loop);
 		return loop;
 	}
@@ -159,8 +159,11 @@ public final class LoopStore {
 		json.add("buffer", buffer);
 
 		JsonArray recordings = new JsonArray();
-		for (String recordingId : loop.recordingIds()) {
-			recordings.add(recordingId);
+		for (Loop.Step step : loop.steps()) {
+			JsonObject entry = new JsonObject();
+			entry.addProperty("id", step.recordingId());
+			entry.addProperty("holdLastKeys", step.holdLastKeys());
+			recordings.add(entry);
 		}
 		json.add("recordings", recordings);
 		json.addProperty("showInInventory", loop.showInInventory());
@@ -185,7 +188,7 @@ public final class LoopStore {
 		}
 
 		int version = json.get("version").getAsInt();
-		if (version != FORMAT_VERSION) {
+		if (version != 1 && version != FORMAT_VERSION) {
 			throw new JsonParseException("unsupported format version " + version);
 		}
 
@@ -207,15 +210,21 @@ public final class LoopStore {
 			throw new JsonParseException("invalid buffer range " + minTicks + ".." + maxTicks);
 		}
 
-		List<String> recordingIds = new ArrayList<>();
+		List<Loop.Step> steps = new ArrayList<>();
 		for (JsonElement element : json.getAsJsonArray("recordings")) {
-			recordingIds.add(element.getAsString());
+			if (element.isJsonObject()) {
+				JsonObject entry = element.getAsJsonObject();
+				JsonElement hold = entry.get("holdLastKeys");
+				steps.add(new Loop.Step(entry.get("id").getAsString(), hold != null && hold.getAsBoolean()));
+			} else {
+				steps.add(new Loop.Step(element.getAsString(), false));
+			}
 		}
 
 		// Optional: files saved before this field existed simply are not shown in the inventory.
 		JsonElement show = json.get("showInInventory");
 		boolean showInInventory = show != null && show.getAsBoolean();
 
-		return new Loop(id, name, createdAt, recordingIds, minTicks, maxTicks, showInInventory);
+		return new Loop(id, name, createdAt, steps, minTicks, maxTicks, showInInventory);
 	}
 }

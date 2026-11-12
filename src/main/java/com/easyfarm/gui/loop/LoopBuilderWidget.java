@@ -16,6 +16,7 @@ import net.minecraft.network.chat.Component;
 import net.minecraft.util.Mth;
 
 import com.easyfarm.gui.HudStyle;
+import com.easyfarm.loop.Loop;
 import com.easyfarm.recording.Recording;
 
 /**
@@ -25,6 +26,9 @@ import com.easyfarm.recording.Recording;
  * and removed with their × or by dragging them out of the column. Buffer blocks are drawn after every recording,
  * including an end buffer that is there even before anything is added: they are part of the loop's structure, not
  * items, so there is nothing to drag, delete or reorder about them.
+ *
+ * <p>Each recording block has a "Hold" toggle: when on, the keys and buttons still held when that recording ended stay
+ * pressed through the random buffer that follows, until the next recording starts.
  */
 public final class LoopBuilderWidget extends AbstractWidget {
 	private static final int HEADER_HEIGHT = 13;
@@ -36,6 +40,7 @@ public final class LoopBuilderWidget extends AbstractWidget {
 	private static final int PAD = 2;
 	private static final int COLUMN_GAP = 8;
 	private static final int REMOVE_WIDTH = 14;
+	private static final int HOLD_WIDTH = 30;
 	private static final int DRAG_THRESHOLD = 3;
 	private static final double SCROLL_STEP = 12;
 
@@ -45,11 +50,13 @@ public final class LoopBuilderWidget extends AbstractWidget {
 	private static final int BUFFER_TEXT = 0xFFE0C068;
 	private static final int REMOVE_HOVERED = 0xFFFF6060;
 	private static final int GHOST_COLOR = 0xCC3A4F3A;
+	private static final int HOLD_ON_COLOR = 0xFF3F6F3F;
+	private static final int HOLD_OFF_COLOR = 0xFF2A2F2A;
 
 	private final Font font;
 	private final List<Recording> available;
 	private final Map<String, Recording> byId = new HashMap<>();
-	private final List<String> sequence;
+	private final List<Loop.Step> sequence;
 	private final Supplier<Component> bufferLabel;
 	private final Runnable onChange;
 
@@ -61,6 +68,7 @@ public final class LoopBuilderWidget extends AbstractWidget {
 	private @Nullable Source pressSource;
 	private int pressIndex;
 	private boolean pressOnRemove;
+	private boolean pressOnHold;
 	private double pressX;
 	private double pressY;
 	private boolean dragging;
@@ -70,7 +78,7 @@ public final class LoopBuilderWidget extends AbstractWidget {
 	 * @param bufferLabel the buffer range as currently typed, shown on every buffer block
 	 * @param onChange    called after the sequence changes
 	 */
-	public LoopBuilderWidget(Font font, int x, int y, int width, int height, List<Recording> available, List<String> sequence,
+	public LoopBuilderWidget(Font font, int x, int y, int width, int height, List<Recording> available, List<Loop.Step> sequence,
 			Supplier<Component> bufferLabel, Runnable onChange) {
 		super(x, y, width, height, Component.translatable("easyfarm.loops.editor.builder"));
 		this.font = font;
@@ -130,6 +138,21 @@ public final class LoopBuilderWidget extends AbstractWidget {
 		return x >= this.sequenceLeft() && x < this.sequenceRight() && y >= this.listTop() && y < this.listBottom();
 	}
 
+	/** Whether x is over the Hold toggle, which sits just left of the duration and the x on every block. */
+	private boolean overHoldToggle(double x) {
+		int right = this.holdToggleRight();
+		return x >= right - HOLD_WIDTH && x < right;
+	}
+
+	private int holdToggleRight() {
+		return this.sequenceRight() - PAD - REMOVE_WIDTH - 2 - this.durationColumnWidth();
+	}
+
+	/** Room reserved for the "m:ss" duration, wide enough for the longest ordinary one. */
+	private int durationColumnWidth() {
+		return this.font.width("00:00") + 6;
+	}
+
 	private int paletteIndexAt(double y) {
 		int index = Mth.floor((y - this.listTop() - PAD + this.paletteScroll) / PALETTE_ROW);
 		return index >= 0 && index < this.available.size() ? index : -1;
@@ -179,6 +202,7 @@ public final class LoopBuilderWidget extends AbstractWidget {
 				this.pressSource = Source.PALETTE;
 				this.pressIndex = index;
 				this.pressOnRemove = false;
+					this.pressOnHold = false;
 			}
 		} else if (this.overSequence(event.x(), event.y())) {
 			int index = this.blockIndexAt(event.y());
@@ -186,6 +210,7 @@ public final class LoopBuilderWidget extends AbstractWidget {
 				this.pressSource = Source.SEQUENCE;
 				this.pressIndex = index;
 				this.pressOnRemove = event.x() >= this.sequenceRight() - PAD - REMOVE_WIDTH;
+				this.pressOnHold = !this.pressOnRemove && this.overHoldToggle(event.x());
 			}
 		}
 		return true;
@@ -193,7 +218,7 @@ public final class LoopBuilderWidget extends AbstractWidget {
 
 	@Override
 	public boolean mouseDragged(MouseButtonEvent event, double dx, double dy) {
-		if (this.pressSource != null && !this.pressOnRemove && !this.dragging
+		if (this.pressSource != null && !this.pressOnRemove && !this.pressOnHold && !this.dragging
 				&& Math.abs(event.x() - this.pressX) + Math.abs(event.y() - this.pressY) > DRAG_THRESHOLD) {
 			this.dragging = true;
 		}
@@ -214,12 +239,16 @@ public final class LoopBuilderWidget extends AbstractWidget {
 			this.drop(source, event.x(), event.y());
 		} else if (source == Source.PALETTE) {
 			// A plain click appends, for players who would rather not drag.
-			this.sequence.add(this.available.get(this.pressIndex).id());
+			this.sequence.add(new Loop.Step(this.available.get(this.pressIndex).id(), false));
 			this.changed();
 			this.sequenceScroll = Double.MAX_VALUE;
 			this.clampScroll();
 		} else if (this.pressOnRemove && this.blockIndexAt(event.y()) == this.pressIndex) {
 			this.sequence.remove(this.pressIndex);
+			this.changed();
+		} else if (this.pressOnHold && this.blockIndexAt(event.y()) == this.pressIndex && this.overHoldToggle(event.x())) {
+			Loop.Step clicked = this.sequence.get(this.pressIndex);
+			this.sequence.set(this.pressIndex, clicked.withHoldLastKeys(!clicked.holdLastKeys()));
 			this.changed();
 		}
 		return true;
@@ -229,13 +258,13 @@ public final class LoopBuilderWidget extends AbstractWidget {
 		boolean onSequence = this.overSequence(x, y);
 		if (source == Source.PALETTE) {
 			if (onSequence) {
-				this.sequence.add(this.insertIndexAt(y), this.available.get(this.pressIndex).id());
+				this.sequence.add(this.insertIndexAt(y), new Loop.Step(this.available.get(this.pressIndex).id(), false));
 				this.changed();
 			}
 			return;
 		}
 
-		String moved = this.sequence.remove(this.pressIndex);
+		Loop.Step moved = this.sequence.remove(this.pressIndex);
 		if (onSequence) {
 			int target = this.insertIndexAt(y);
 			if (target > this.pressIndex) {
@@ -338,7 +367,7 @@ public final class LoopBuilderWidget extends AbstractWidget {
 			graphics.outline(x0, y + 1, x1 - x0, BLOCK - 2, HudStyle.PANEL_BORDER);
 			graphics.centeredText(this.font, Component.translatable("easyfarm.loops.editor.drop_here"),
 					(x0 + x1) / 2, y + (BLOCK - this.font.lineHeight) / 2 + 1, HudStyle.TEXT_MUTED);
-			this.extractBuffer(graphics, x0, x1, y + BLOCK, true);
+			this.extractBuffer(graphics, x0, x1, y + BLOCK, true, false);
 		}
 
 		for (int i = 0; i < count; i++) {
@@ -348,7 +377,7 @@ public final class LoopBuilderWidget extends AbstractWidget {
 			}
 			boolean beingDragged = this.dragging && this.pressSource == Source.SEQUENCE && this.pressIndex == i;
 			this.extractBlock(graphics, i, x0, x1, y, beingDragged, i == hoveredBlock && mouseX >= x1 - REMOVE_WIDTH);
-			this.extractBuffer(graphics, x0, x1, y + BLOCK, i == count - 1);
+			this.extractBuffer(graphics, x0, x1, y + BLOCK, i == count - 1, this.sequence.get(i).holdLastKeys());
 		}
 
 		int footerY = this.slotY(Math.max(1, count)) + 3;
@@ -361,7 +390,8 @@ public final class LoopBuilderWidget extends AbstractWidget {
 	}
 
 	private void extractBlock(GuiGraphicsExtractor graphics, int index, int x0, int x1, int y, boolean faded, boolean removeHovered) {
-		Recording recording = this.byId.get(this.sequence.get(index));
+		Loop.Step blockStep = this.sequence.get(index);
+		Recording recording = this.byId.get(blockStep.recordingId());
 		int background = recording == null ? MISSING_COLOR : BLOCK_COLOR;
 		graphics.fill(x0, y + 1, x1, y + BLOCK - 1, faded ? HudStyle.TAB_IDLE : background);
 		graphics.fill(x0, y + 1, x0 + 2, y + BLOCK - 1, recording == null ? REMOVE_HOVERED : HudStyle.ACCENT);
@@ -373,24 +403,31 @@ public final class LoopBuilderWidget extends AbstractWidget {
 		String label = (index + 1) + ". " + (recording == null
 				? Component.translatable("easyfarm.loops.editor.missing").getString()
 				: recording.name());
-		label = this.font.plainSubstrByWidth(label, x1 - x0 - durationWidth - REMOVE_WIDTH - 14);
+		label = this.font.plainSubstrByWidth(label, x1 - x0 - this.durationColumnWidth() - HOLD_WIDTH - REMOVE_WIDTH - 18);
 		graphics.text(this.font, label, x0 + 6, textY, textColor, false);
 		graphics.text(this.font, duration, x1 - REMOVE_WIDTH - 4 - durationWidth, textY, HudStyle.TEXT_MUTED, false);
+
+		int holdRight = x1 - REMOVE_WIDTH - 2 - this.durationColumnWidth();
+		boolean holdOn = blockStep.holdLastKeys();
+		graphics.fill(holdRight - HOLD_WIDTH, y + 3, holdRight, y + BLOCK - 3, holdOn ? HOLD_ON_COLOR : HOLD_OFF_COLOR);
+		graphics.outline(holdRight - HOLD_WIDTH, y + 3, HOLD_WIDTH, BLOCK - 6, holdOn ? HudStyle.ACCENT : HudStyle.SEPARATOR);
+		graphics.centeredText(this.font, Component.translatable("easyfarm.loops.editor.hold"), holdRight - HOLD_WIDTH / 2, textY,
+				holdOn ? HudStyle.TEXT : HudStyle.TEXT_MUTED);
 		graphics.text(this.font, "×", x1 - REMOVE_WIDTH + 4, textY, removeHovered ? REMOVE_HOVERED : HudStyle.TEXT_MUTED, false);
 	}
 
-	private void extractBuffer(GuiGraphicsExtractor graphics, int x0, int x1, int y, boolean end) {
+	private void extractBuffer(GuiGraphicsExtractor graphics, int x0, int x1, int y, boolean end, boolean holding) {
 		int inset = 10;
 		graphics.fill(x0 + inset, y + 1, x1 - inset, y + BUFFER - 1, BUFFER_COLOR);
-		Component label = Component.translatable(end ? "easyfarm.loops.editor.end_buffer" : "easyfarm.loops.editor.buffer",
-				this.bufferLabel.get());
+		String key = (end ? "easyfarm.loops.editor.end_buffer" : "easyfarm.loops.editor.buffer") + (holding ? ".hold" : "");
+		Component label = Component.translatable(key, this.bufferLabel.get());
 		graphics.centeredText(this.font, label, (x0 + x1) / 2, y + (BUFFER - this.font.lineHeight) / 2 + 1, BUFFER_TEXT);
 	}
 
 	private void extractGhost(GuiGraphicsExtractor graphics, int mouseX, int mouseY) {
 		String id = this.pressSource == Source.PALETTE
 				? this.available.get(this.pressIndex).id()
-				: this.sequence.get(this.pressIndex);
+				: this.sequence.get(this.pressIndex).recordingId();
 		Recording recording = this.byId.get(id);
 		String name = recording == null ? Component.translatable("easyfarm.loops.editor.missing").getString() : recording.name();
 
@@ -418,6 +455,11 @@ public final class LoopBuilderWidget extends AbstractWidget {
 	/** GUI coordinates of the middle of loop block {@code index} (away from its × button). */
 	public int[] blockCenter(int index) {
 		return new int[] {(this.sequenceLeft() + this.sequenceRight()) / 2 - REMOVE_WIDTH, this.slotY(index) + BLOCK / 2};
+	}
+
+	/** GUI coordinates of the middle of the Hold toggle on loop block {@code index}. */
+	public int[] holdToggleCenter(int index) {
+		return new int[] {this.holdToggleRight() - HOLD_WIDTH / 2, this.slotY(index) + BLOCK / 2};
 	}
 
 	/** GUI coordinates of the × on loop block {@code index}. */

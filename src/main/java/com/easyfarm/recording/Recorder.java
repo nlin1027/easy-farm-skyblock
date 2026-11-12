@@ -11,23 +11,31 @@ import org.lwjgl.glfw.GLFW;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.mojang.blaze3d.platform.InputConstants;
+
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.Options;
+import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.Identifier;
+import net.minecraft.util.Mth;
 
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keymapping.v1.KeyMappingHelper;
+import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderEvents;
 
 import com.easyfarm.EasyFarmClient;
+import com.easyfarm.loop.LoopPlayer;
 
 /**
- * Captures the movement keys ({@link MovementKey}) once per client tick and saves the result with {@link RecordingStore}.
+ * Captures every keyboard key, every mouse button and the camera, and saves the result with {@link RecordingStore}.
  *
- * <p>Only the state of the player's own key bindings is read; nothing is sent anywhere. Recording pauses while any screen
- * is open (the HUD, the inventory, chat, the pause menu): the game releases movement keys then anyway, and it keeps
- * the moment you open the HUD to press "Stop" out of the recording.
+ * <p>Keys and buttons are read from the physical keyboard and mouse ({@link PhysicalInput}), once per client tick, not from
+ * the key bindings, so every key is captured whether or not Minecraft binds it. Camera movement is recorded as the change
+ * in yaw/pitch since the previous sample, several times per tick. Nothing is sent anywhere.
+ *
+ * <p>Recording pauses while any screen is open (chat, inventory, the HUD): typing and menu clicks never end up in a
+ * recording. Escape, the chat and command keys, and this mod's record and loop keys are never recorded.
  *
  * <p>Start and stop from the Record tab, or from anywhere with the "Start/stop recording" key (F8 by default).
  */
@@ -39,7 +47,14 @@ public final class Recorder {
 
 	private static final KeyMapping.Category CATEGORY =
 			KeyMapping.Category.register(Identifier.fromNamespaceAndPath(EasyFarmClient.MOD_ID, "main"));
-	private static final MovementKey[] KEYS = MovementKey.values();
+
+	/** Every GLFW keyboard key code worth polling (polling an unknown code makes GLFW log an error). */
+	private static final int[] KEY_CODES = buildKeyCodes();
+	private static final int MOUSE_BUTTONS = 8;
+
+	/** Camera samples per game tick. Vanilla ticks at 20/s; 1.75 samples per tick is 35/s. */
+	public static final float LOOK_SAMPLES_PER_TICK = 1.75f;
+	private static final float LOOK_SAMPLE_GAP = 1.0f / LOOK_SAMPLES_PER_TICK;
 
 	private static @Nullable KeyMapping toggleKey;
 
@@ -47,7 +62,15 @@ public final class Recorder {
 	private static Instant startedAt = Instant.EPOCH;
 	private static int tick;
 	private static final List<Recording.Event> events = new ArrayList<>();
-	private static final boolean[] held = new boolean[KEYS.length];
+	private static final boolean[] keyHeld = new boolean[GLFW.GLFW_KEY_LAST + 1];
+	private static final boolean[] mouseHeld = new boolean[MOUSE_BUTTONS];
+	private static float lastYaw;
+	private static float lastPitch;
+	private static boolean haveLook;
+	/** Timeline position of the last camera sample. */
+	private static float lastLookTime;
+	private static float startYaw;
+	private static float startPitch;
 
 	private static String activeName = "";
 	/** What is typed in the Record tab's name box; survives the HUD being rebuilt or closed. */
@@ -58,13 +81,33 @@ public final class Recorder {
 	private Recorder() {
 	}
 
+	private static int[] buildKeyCodes() {
+		List<Integer> codes = new ArrayList<>();
+		for (int code = GLFW.GLFW_KEY_SPACE; code <= GLFW.GLFW_KEY_LAST; code++) {
+			boolean valid = code == 32 || code == 39 || (code >= 44 && code <= 57) || code == 59 || code == 61
+					|| (code >= 65 && code <= 93) || code == 96 || code == 161 || code == 162
+					|| (code >= 256 && code <= 269) || (code >= 280 && code <= 284)
+					|| (code >= 290 && code <= 314) || (code >= 320 && code <= 348);
+			if (valid) {
+				codes.add(code);
+			}
+		}
+		return codes.stream().mapToInt(Integer::intValue).toArray();
+	}
+
 	public static void register() {
 		toggleKey = KeyMappingHelper.registerKeyMapping(
 				new KeyMapping("key.easyfarm.toggle_recording", GLFW.GLFW_KEY_F8, CATEGORY));
-		ClientTickEvents.END_CLIENT_TICK.register(Recorder::onEndTick);
+		ClientTickEvents.START_CLIENT_TICK.register(Recorder::onStartTick);
+		LevelRenderEvents.START_MAIN.register(context -> onFrame(Minecraft.getInstance()));
 	}
 
-	private static void onEndTick(Minecraft minecraft) {
+	/** True for this mod's own bindings, which loop playback leaves alone. */
+	public static boolean isOwnMapping(KeyMapping mapping) {
+		return mapping == toggleKey || LoopPlayer.isOwnMapping(mapping);
+	}
+
+	private static void onStartTick(Minecraft minecraft) {
 		if (toggleKey != null) {
 			while (toggleKey.consumeClick()) {
 				if (recording) {
@@ -83,16 +126,26 @@ public final class Recorder {
 		}
 
 		// Left the world: keep what was captured so far.
-		if (minecraft.player == null) {
+		LocalPlayer player = minecraft.player;
+		if (player == null) {
 			stop();
 			return;
 		}
 
 		if (minecraft.gui.screen() != null || minecraft.isPaused()) {
+			// Forget the camera so a screen's mouse movement is not counted as a turn.
+			haveLook = false;
 			return;
 		}
 
-		sample(minecraft.options);
+		if (!haveLook) {
+			lastYaw = player.getYRot();
+			lastPitch = player.getXRot();
+			lastLookTime = tick;
+			haveLook = true;
+		}
+		sampleCamera(player);
+		sampleInput(minecraft);
 		tick++;
 
 		if (tick >= MAX_TICKS) {
@@ -100,14 +153,81 @@ public final class Recorder {
 		}
 	}
 
-	private static void sample(Options options) {
-		for (int i = 0; i < KEYS.length; i++) {
-			boolean down = KEYS[i].mapping(options).isDown();
-			if (down != held[i]) {
-				held[i] = down;
-				events.add(new Recording.Event(tick, KEYS[i], down));
+	private static void sampleCamera(LocalPlayer player) {
+		float yaw = player.getYRot();
+		float pitch = player.getXRot();
+		float dYaw = yaw - lastYaw;
+		float dPitch = pitch - lastPitch;
+		if (Math.abs(dYaw) > 1e-4f || Math.abs(dPitch) > 1e-4f) {
+			events.add(Recording.Event.look(tick, 0, dYaw, dPitch));
+		}
+		lastYaw = yaw;
+		lastPitch = pitch;
+		lastLookTime = tick;
+	}
+
+	/**
+	 * Extra camera samples between ticks, taken once per rendered frame whenever enough of a tick has passed since the last
+	 * sample. {@code tick} was already advanced for the tick that just ran, so the frame sits at {@code tick - 1 + partial}.
+	 */
+	private static void onFrame(Minecraft minecraft) {
+		LocalPlayer player = minecraft.player;
+		if (!recording || player == null || !haveLook || tick == 0
+				|| minecraft.gui.screen() != null || minecraft.isPaused()) {
+			return;
+		}
+		float partial = minecraft.getDeltaTracker().getGameTimeDeltaPartialTick(false);
+		float time = tick - 1 + Mth.clamp(partial, 0.0f, 0.999f);
+		if (time - lastLookTime < LOOK_SAMPLE_GAP) {
+			return;
+		}
+		float yaw = player.getYRot();
+		float pitch = player.getXRot();
+		float dYaw = yaw - lastYaw;
+		float dPitch = pitch - lastPitch;
+		if (Math.abs(dYaw) > 1e-4f || Math.abs(dPitch) > 1e-4f) {
+			int whole = (int) Math.floor(time);
+			events.add(Recording.Event.look(whole, time - whole, dYaw, dPitch));
+		}
+		lastYaw = yaw;
+		lastPitch = pitch;
+		lastLookTime = time;
+	}
+
+	private static void sampleInput(Minecraft minecraft) {
+		for (int code : KEY_CODES) {
+			boolean down = PhysicalInput.key(code) && !isExcluded(minecraft, code);
+			if (down != keyHeld[code]) {
+				keyHeld[code] = down;
+				events.add(Recording.Event.key(tick, code, down));
 			}
 		}
+		for (int button = 0; button < MOUSE_BUTTONS; button++) {
+			boolean down = PhysicalInput.mouse(button) && !isExcludedMouse(button);
+			if (down != mouseHeld[button]) {
+				mouseHeld[button] = down;
+				events.add(Recording.Event.mouse(tick, button, down));
+			}
+		}
+	}
+
+	/** Keys that must never be replayed: they would open screens or control the recorder or the loop player itself. */
+	private static boolean isExcluded(Minecraft minecraft, int code) {
+		if (code == GLFW.GLFW_KEY_ESCAPE) {
+			return true;
+		}
+		InputConstants.Key key = InputConstants.Type.KEYSYM.getOrCreate(code);
+		return isOwnKey(key) || minecraft.options.keyChat.matches(key) || minecraft.options.keyCommand.matches(key);
+	}
+
+	/** The record key can be rebound to a mouse button, which must not be recorded either. */
+	private static boolean isExcludedMouse(int button) {
+		return isOwnKey(InputConstants.Type.MOUSE.getOrCreate(button));
+	}
+
+	private static boolean isOwnKey(InputConstants.Key key) {
+		return (toggleKey != null && !toggleKey.isUnbound() && toggleKey.saveString().equals(key.getName()))
+				|| LoopPlayer.isToggleKey(key);
 	}
 
 	/**
@@ -128,13 +248,24 @@ public final class Recorder {
 			return nameError;
 		}
 
+		// Never let a recording capture a loop's own input.
+		LoopPlayer.stop();
+
 		recording = true;
 		activeName = name.strip();
 		draftName = "";
 		startedAt = Instant.now();
 		tick = 0;
 		events.clear();
-		Arrays.fill(held, false);
+		Arrays.fill(keyHeld, false);
+		Arrays.fill(mouseHeld, false);
+		// Remember the exact camera angle so every playback can turn back to it first.
+		startYaw = minecraft.player.getYRot();
+		startPitch = minecraft.player.getXRot();
+		lastYaw = startYaw;
+		lastPitch = startPitch;
+		lastLookTime = 0;
+		haveLook = true;
 		lastResult = null;
 
 		minecraft.player.sendOverlayMessage(Component.translatable("easyfarm.record.overlay.started", activeName, toggleKeyName()));
@@ -170,9 +301,9 @@ public final class Recorder {
 	}
 
 	/**
-	 * Stops the current recording and saves it, unless nothing was pressed.
+	 * Stops the current recording and saves it, unless nothing was pressed or turned.
 	 *
-	 * @return the saved recording, or {@code null} if nothing was saved (not recording, nothing pressed, or a write error)
+	 * @return the saved recording, or {@code null} if nothing was saved (not recording, nothing happened, or a write error)
 	 */
 	public static @Nullable Recording stop() {
 		if (!recording) {
@@ -181,11 +312,21 @@ public final class Recorder {
 		recording = false;
 		Recording saved = null;
 
-		// Close every key that is still down, so playback always ends with nothing held.
-		for (int i = 0; i < KEYS.length; i++) {
-			if (held[i]) {
-				held[i] = false;
-				events.add(new Recording.Event(tick, KEYS[i], false));
+		// Close everything still held so playback always ends with nothing pressed, but remember what it was: a loop can
+		// choose to keep exactly those inputs pressed through the buffer after this recording.
+		List<Recording.Input> heldAtEnd = new ArrayList<>();
+		for (int code : KEY_CODES) {
+			if (keyHeld[code]) {
+				keyHeld[code] = false;
+				heldAtEnd.add(new Recording.Input(Recording.Type.KEY, code));
+				events.add(Recording.Event.key(tick, code, false));
+			}
+		}
+		for (int button = 0; button < MOUSE_BUTTONS; button++) {
+			if (mouseHeld[button]) {
+				mouseHeld[button] = false;
+				heldAtEnd.add(new Recording.Input(Recording.Type.MOUSE, button));
+				events.add(Recording.Event.mouse(tick, button, false));
 			}
 		}
 
@@ -194,7 +335,7 @@ public final class Recorder {
 			draftName = activeName; // let the player try again under the same name
 		} else {
 			try {
-				saved = RecordingStore.saveNew(activeName, startedAt, tick, events);
+				saved = RecordingStore.saveNew(activeName, startedAt, tick, startYaw, startPitch, events, heldAtEnd);
 				lastResult = Component.translatable("easyfarm.record.result.saved",
 						saved.name(), Recording.formatDuration(saved.lengthTicks()));
 			} catch (IOException e) {
@@ -220,10 +361,11 @@ public final class Recorder {
 		return tick;
 	}
 
+	/** Key and mouse presses captured so far. */
 	public static int pressCount() {
 		int presses = 0;
 		for (Recording.Event event : events) {
-			if (event.down()) {
+			if (event.type() != Recording.Type.LOOK && event.down()) {
 				presses++;
 			}
 		}

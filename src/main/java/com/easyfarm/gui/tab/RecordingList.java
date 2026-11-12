@@ -15,7 +15,6 @@ import net.minecraft.client.gui.components.ObjectSelectionList;
 import net.minecraft.network.chat.Component;
 
 import com.easyfarm.gui.HudStyle;
-import com.easyfarm.recording.MovementKey;
 import com.easyfarm.recording.Recording;
 
 /** Scrollable list of saved recordings, styled to match the HUD panel rather than vanilla's dirt-style lists. */
@@ -92,6 +91,8 @@ final class RecordingList extends ObjectSelectionList<RecordingList.Entry> {
 		graphics.fill(x0, y0, x0 + 2, y1, HudStyle.ACCENT);
 	}
 
+	private static final int MAX_KEY_LABELS = 6;
+
 	final class Entry extends ObjectSelectionList.Entry<Entry> {
 		private final Recording recording;
 		private final Component details;
@@ -101,8 +102,12 @@ final class RecordingList extends ObjectSelectionList<RecordingList.Entry> {
 			this.recording = recording;
 
 			StringJoiner keys = new StringJoiner(" ");
-			for (MovementKey key : recording.keysUsed()) {
-				keys.add(key.shortLabel());
+			List<String> labels = recording.inputLabels();
+			for (int i = 0; i < labels.size() && i < MAX_KEY_LABELS; i++) {
+				keys.add(labels.get(i));
+			}
+			if (labels.size() > MAX_KEY_LABELS) {
+				keys.add("+" + (labels.size() - MAX_KEY_LABELS));
 			}
 			this.details = Component.translatable("easyfarm.recordings.details",
 					Recording.formatDuration(recording.lengthTicks()), recording.pressCount(), keys.toString());

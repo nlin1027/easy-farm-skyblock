@@ -1,49 +1,36 @@
 package com.easyfarm.recording;
 
-import java.util.function.Function;
-
 import org.jspecify.annotations.Nullable;
-
-import net.minecraft.client.KeyMapping;
-import net.minecraft.client.Options;
+import org.lwjgl.glfw.GLFW;
 
 /**
- * The movement keys Easy Farm records. They are tracked through the player's key bindings rather than raw keyboard keys,
- * so a player who moved "forward" to another key still gets it recorded, and playback can drive the same bindings.
- *
- * <p>The {@link #id} is what goes into the JSON file, so it must never change once released.
+ * The seven movement keys that the first recording format (version 1) stored by name. Only used to read those old files:
+ * new recordings store raw GLFW key codes for every key. The {@link #id} is what was written to disk, so it never changes.
  */
 public enum MovementKey {
-	FORWARD("forward", "W", options -> options.keyUp),
-	LEFT("left", "A", options -> options.keyLeft),
-	BACK("back", "S", options -> options.keyDown),
-	RIGHT("right", "D", options -> options.keyRight),
-	JUMP("jump", "Space", options -> options.keyJump),
-	SNEAK("sneak", "Shift", options -> options.keyShift),
-	SPRINT("sprint", "Ctrl", options -> options.keySprint);
+	FORWARD("forward", GLFW.GLFW_KEY_W),
+	LEFT("left", GLFW.GLFW_KEY_A),
+	BACK("back", GLFW.GLFW_KEY_S),
+	RIGHT("right", GLFW.GLFW_KEY_D),
+	JUMP("jump", GLFW.GLFW_KEY_SPACE),
+	SNEAK("sneak", GLFW.GLFW_KEY_LEFT_SHIFT),
+	SPRINT("sprint", GLFW.GLFW_KEY_LEFT_CONTROL);
 
 	private final String id;
-	private final String shortLabel;
-	private final Function<Options, KeyMapping> mapping;
+	private final int defaultCode;
 
-	MovementKey(String id, String shortLabel, Function<Options, KeyMapping> mapping) {
+	MovementKey(String id, int defaultCode) {
 		this.id = id;
-		this.shortLabel = shortLabel;
-		this.mapping = mapping;
+		this.defaultCode = defaultCode;
 	}
 
-	/** Stable name used in recording files. */
 	public String id() {
 		return this.id;
 	}
 
-	/** The default key, used as a compact label in the HUD. */
-	public String shortLabel() {
-		return this.shortLabel;
-	}
-
-	public KeyMapping mapping(Options options) {
-		return this.mapping.apply(options);
+	/** The key these movements are bound to by default. */
+	public int defaultCode() {
+		return this.defaultCode;
 	}
 
 	public static @Nullable MovementKey byId(String id) {

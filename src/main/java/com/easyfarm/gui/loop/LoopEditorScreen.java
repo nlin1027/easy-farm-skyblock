@@ -40,7 +40,7 @@ public final class LoopEditorScreen extends Screen {
 
 	private final Screen parent;
 	private final @Nullable Loop editing;
-	private final List<String> sequence;
+	private final List<Loop.Step> sequence;
 	private final List<Recording> recordings;
 
 	private String name;
@@ -67,7 +67,7 @@ public final class LoopEditorScreen extends Screen {
 			this.minText = DEFAULT_MIN;
 			this.maxText = DEFAULT_MAX;
 		} else {
-			this.sequence = new ArrayList<>(editing.recordingIds());
+			this.sequence = new ArrayList<>(editing.steps());
 			this.name = editing.name();
 			this.minText = Loop.formatSeconds(editing.bufferMinTicks());
 			this.maxText = Loop.formatSeconds(editing.bufferMaxTicks());

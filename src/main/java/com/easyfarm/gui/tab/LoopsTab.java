@@ -3,6 +3,7 @@ package com.easyfarm.gui.tab;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 import org.jspecify.annotations.Nullable;
@@ -64,7 +65,7 @@ public final class LoopsTab extends HudTab {
 		if (playing != null) {
 			this.addLine(Component.translatable("easyfarm.loops.heading.playing", playing.name()).withStyle(ChatFormatting.BOLD));
 			this.addLine(Component.translatable(
-					LoopPlayer.isWaitingForAttack() ? "easyfarm.loops.position.waiting" : "easyfarm.loops.position",
+					LoopPlayer.isWaiting() ? waitingKey() : "easyfarm.loops.position",
 					LoopPlayer.cycle(), LoopPlayer.describePosition()).withStyle(ChatFormatting.GRAY));
 		} else {
 			this.addLine((loops.isEmpty()
@@ -80,7 +81,7 @@ public final class LoopsTab extends HudTab {
 			this.list = null;
 			this.addText(Component.translatable("easyfarm.loops.empty"));
 			this.addMutedText(Component.translatable("easyfarm.loops.empty_hint"));
-			this.addHoldToRunSetting();
+			this.addPlaybackSettings();
 			Button create = this.addButton(Component.translatable("easyfarm.loops.new_loop"), button -> this.openEditor(null));
 			if (recordings.isEmpty()) {
 				create.active = false;
@@ -96,7 +97,7 @@ public final class LoopsTab extends HudTab {
 						this::onSelectionChanged, LoopsTab::saveInventoryFlag),
 				LayoutSettings::alignHorizontallyCenter);
 
-		this.addHoldToRunSetting();
+		this.addPlaybackSettings();
 
 		LinearLayout buttons = LinearLayout.horizontal().spacing(4);
 		Button create = buttons.addChild(this.rowButton("easyfarm.loops.new", button -> this.openEditor(null)));
@@ -127,15 +128,41 @@ public final class LoopsTab extends HudTab {
 		this.fixedHeight += this.font.lineHeight + SPACING;
 	}
 
-	/** "Only run while left click is held": when off, a started loop plays continuously until stopped. */
-	private void addHoldToRunSetting() {
-		Checkbox checkbox = Checkbox.builder(Component.translatable("easyfarm.loops.setting.hold_attack"), this.font)
-				.selected(LoopSettings.holdAttackToRun())
-				.tooltip(Tooltip.create(Component.translatable("easyfarm.loops.setting.hold_attack.tooltip")))
-				.onValueChange((box, value) -> LoopSettings.setHoldAttackToRun(value))
+	/** Which paused-loop hint fits the current play mode. */
+	private static String waitingKey() {
+		return switch (LoopSettings.playMode()) {
+			case HOLD -> "easyfarm.loops.position.waiting_hold";
+			case KEYBIND -> "easyfarm.loops.position.waiting_key";
+			case BOTH -> "easyfarm.loops.position.waiting_both";
+		};
+	}
+
+	private static Component playModeLabel() {
+		return Component.translatable("easyfarm.loops.setting.play_mode",
+				Component.translatable("easyfarm.loops.setting.play_mode." + LoopSettings.playMode().name().toLowerCase(Locale.ROOT)));
+	}
+
+	/**
+	 * Playback settings: what makes a loop run (hold left click, the loop key, or either) and whether a keybind-started
+	 * loop keeps playing while the window is not focused.
+	 */
+	private void addPlaybackSettings() {
+		// Cycling the mode rebuilds the tab so the background checkbox greys out when it cannot apply.
+		Button mode = Button.builder(playModeLabel(), button -> {
+			LoopSettings.setPlayMode(LoopSettings.playMode().next());
+			this.screen.refresh();
+		}).width(220).tooltip(Tooltip.create(Component.translatable("easyfarm.loops.setting.play_mode.tooltip", LoopPlayer.toggleKeyName()))).build();
+		this.layout.addChild(mode, LayoutSettings::alignHorizontallyCenter);
+		this.fixedHeight += mode.getHeight() + SPACING;
+
+		Checkbox background = Checkbox.builder(Component.translatable("easyfarm.loops.setting.background"), this.font)
+				.selected(LoopSettings.backgroundPlay())
+				.tooltip(Tooltip.create(Component.translatable("easyfarm.loops.setting.background.tooltip")))
+				.onValueChange((box, value) -> LoopSettings.setBackgroundPlay(value))
 				.build();
-		this.layout.addChild(checkbox, LayoutSettings::alignHorizontallyCenter);
-		this.fixedHeight += checkbox.getHeight() + SPACING;
+		background.active = LoopSettings.playMode().allowsKeybind();
+		this.layout.addChild(background, LayoutSettings::alignHorizontallyCenter);
+		this.fixedHeight += background.getHeight() + SPACING;
 	}
 
 	private Button rowButton(String key, Button.OnPress onPress) {

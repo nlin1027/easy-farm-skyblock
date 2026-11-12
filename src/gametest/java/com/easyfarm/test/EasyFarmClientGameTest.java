@@ -5,6 +5,8 @@ import java.io.UncheckedIOException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 import org.lwjgl.glfw.GLFW;
@@ -38,7 +40,7 @@ import com.easyfarm.loop.Loop;
 import com.easyfarm.loop.LoopPlayer;
 import com.easyfarm.loop.LoopSettings;
 import com.easyfarm.loop.LoopStore;
-import com.easyfarm.recording.MovementKey;
+import com.easyfarm.recording.PhysicalInput;
 import com.easyfarm.recording.Recorder;
 import com.easyfarm.recording.Recording;
 import com.easyfarm.recording.RecordingStore;
@@ -52,12 +54,31 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 	/** Messages the server sent us. A command the server received and rejected always produces one. */
 	private static final List<String> SERVER_MESSAGES = new CopyOnWriteArrayList<>();
 
+	/**
+	 * Keys and buttons the recorder and the loop player see as physically held. The harness cannot change what GLFW
+	 * reports, so the mod's {@link PhysicalInput} is pointed at these sets for the whole test.
+	 */
+	private static final Set<Integer> FAKE_KEYS = ConcurrentHashMap.newKeySet();
+	private static final Set<Integer> FAKE_MOUSE = ConcurrentHashMap.newKeySet();
+
 	@Override
 	public void runTest(ClientGameTestContext context) {
 		// Overlay (action bar) messages are the mod's own feedback; a rejected command shows up as a chat message.
 		ClientReceiveMessageEvents.GAME.register((message, overlay) -> {
 			if (!overlay) {
 				SERVER_MESSAGES.add(message.getString());
+			}
+		});
+
+		PhysicalInput.override(new PhysicalInput.Source() {
+			@Override
+			public boolean key(int code) {
+				return FAKE_KEYS.contains(code);
+			}
+
+			@Override
+			public boolean mouse(int button) {
+				return FAKE_MOUSE.contains(button);
 			}
 		});
 
@@ -77,6 +98,9 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 			editorBuildsLoop(context);
 			buffersAreRolledEveryTime(context);
 			holdLeftClickToRun(context);
+			keybindPlaysAndPauses(context);
+			holdLastKeysThroughBuffer(context);
+			oldFilesStillLoad(context);
 
 			gardenDetection(context);
 			SkyblockLocation.setOverride(true);
@@ -193,9 +217,18 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 		context.waitFor(client -> client.gui.screen() == null);
 		check(context.computeOnClient(client -> Recorder.isRecording()), "Clicking 'Start recording' did not start recording");
 
-		context.getInput().holdKeyFor(options -> options.keyUp, 20);
-		context.getInput().holdKeyFor(options -> options.keyJump, 5);
+		// W, an unbound key (Q is drop, but Z is not bound to anything), the right mouse button and a camera turn.
+		FAKE_KEYS.add(GLFW.GLFW_KEY_W);
 		context.waitTicks(10);
+		FAKE_KEYS.add(GLFW.GLFW_KEY_Z);
+		FAKE_MOUSE.add(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+		context.waitTicks(5);
+		FAKE_MOUSE.remove(GLFW.GLFW_MOUSE_BUTTON_RIGHT);
+		FAKE_KEYS.remove(GLFW.GLFW_KEY_Z);
+		context.runOnClient(client -> client.player.setYRot(client.player.getYRot() + 30.0f));
+		context.waitTicks(10);
+		FAKE_KEYS.remove(GLFW.GLFW_KEY_W);
+		context.waitTicks(5);
 
 		context.getInput().pressKey(GLFW.GLFW_KEY_F8);
 		context.waitFor(client -> !Recorder.isRecording());
@@ -204,12 +237,19 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 		check(recordings.size() == 1, "Expected 1 saved recording, found " + recordings.size());
 		Recording recording = recordings.getFirst();
 		check(recording.name().equals("Wheat farm"), "The recording should be called 'Wheat farm', but is '" + recording.name() + "'");
-		check(recording.keysUsed().containsAll(List.of(MovementKey.FORWARD, MovementKey.JUMP)),
-				"The recording should contain forward and jump, but has " + recording.keysUsed());
+		check(recording.usesInput(Recording.Type.KEY, GLFW.GLFW_KEY_W), "The recording should contain W");
+		check(recording.usesInput(Recording.Type.KEY, GLFW.GLFW_KEY_Z), "The recording should contain the unbound key Z");
+		check(recording.usesInput(Recording.Type.MOUSE, GLFW.GLFW_MOUSE_BUTTON_RIGHT), "The recording should contain the right mouse button");
+		check(!recording.usesInput(Recording.Type.KEY, GLFW.GLFW_KEY_F8), "The record key must not be recorded");
 		check(recording.lengthTicks() >= 30, "The recording is too short: " + recording.lengthTicks() + " ticks");
-		long presses = recording.events().stream().filter(Recording.Event::down).count();
-		long releases = recording.events().size() - presses;
+		List<Recording.Event> inputs = recording.events().stream().filter(e -> e.type() != Recording.Type.LOOK).toList();
+		long presses = inputs.stream().filter(Recording.Event::down).count();
+		long releases = inputs.size() - presses;
 		check(presses == releases, "Every press needs a release: " + presses + " presses, " + releases + " releases");
+		double turned = recording.events().stream().filter(e -> e.type() == Recording.Type.LOOK).mapToDouble(Recording.Event::yaw).sum();
+		check(Math.abs(turned - 30.0) < 0.5, "The camera turn should add up to 30 degrees, but is " + turned);
+		check(recording.hasStartLook(), "The recording should remember the starting camera angle");
+		check(recording.heldAtEnd().isEmpty(), "Nothing was held at the end, but heldAtEnd is " + recording.heldAtEnd());
 
 		runChatCommand(context, "ef");
 		context.waitForScreen(EasyFarmScreen.class);
@@ -281,10 +321,12 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 					LoopStore.delete(loop);
 				}
 				// Saved oldest first; the palette lists newest first, so "Left" is row 0.
-				RecordingStore.saveNew("Forward", Instant.parse("2026-01-01T00:00:00Z"), 6,
-						List.of(new Recording.Event(0, MovementKey.FORWARD, true), new Recording.Event(6, MovementKey.FORWARD, false)));
-				RecordingStore.saveNew("Left", Instant.parse("2026-01-01T00:01:00Z"), 4,
-						List.of(new Recording.Event(0, MovementKey.LEFT, true), new Recording.Event(4, MovementKey.LEFT, false)));
+				RecordingStore.saveNew("Forward", Instant.parse("2026-01-01T00:00:00Z"), 6, Float.NaN, Float.NaN,
+						List.of(Recording.Event.key(0, GLFW.GLFW_KEY_W, true), Recording.Event.key(6, GLFW.GLFW_KEY_W, false)),
+						List.of(new Recording.Input(Recording.Type.KEY, GLFW.GLFW_KEY_W)));
+				RecordingStore.saveNew("Left", Instant.parse("2026-01-01T00:01:00Z"), 4, Float.NaN, Float.NaN,
+						List.of(Recording.Event.key(0, GLFW.GLFW_KEY_A, true), Recording.Event.key(4, GLFW.GLFW_KEY_A, false)),
+						List.of(new Recording.Input(Recording.Type.KEY, GLFW.GLFW_KEY_A)));
 			} catch (IOException e) {
 				throw new UncheckedIOException(e);
 			}
@@ -323,6 +365,15 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 		context.waitTicks(2);
 		check(editorSequence(context).equals(List.of(forward, left)), "× should remove the block: " + editorSequence(context));
 
+		// The Hold toggle flips only its own block, and flips back.
+		clickAtGuiPosition(context, builderPoint(context, b -> b.holdToggleCenter(0)));
+		context.waitTicks(2);
+		check(editorHolds(context).equals(List.of(true, false)), "Clicking Hold on block 1 should turn it on: " + editorHolds(context));
+		context.takeScreenshot("loops-2b-editor-hold-on");
+		clickAtGuiPosition(context, builderPoint(context, b -> b.holdToggleCenter(0)));
+		context.waitTicks(2);
+		check(editorHolds(context).equals(List.of(false, false)), "Clicking Hold again should turn it off: " + editorHolds(context));
+
 		// Equal bounds would make the buffer fixed, which is never allowed.
 		setBufferRange(context, "0.5", "0.5");
 		clickButton(context, "Save loop");
@@ -351,7 +402,7 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 	 * range, and the rolls must actually vary. Then stop with F9 and check no key is left held.
 	 */
 	private static void buffersAreRolledEveryTime(ClientGameTestContext context) {
-		context.runOnClient(client -> LoopSettings.setHoldAttackToRun(false));
+		context.runOnClient(client -> LoopSettings.setPlayMode(LoopSettings.PlayMode.KEYBIND));
 		context.runOnClient(client -> ((EasyFarmScreen) client.gui.screen()).refresh());
 		context.waitTicks(2);
 		clickButton(context, "Start");
@@ -391,45 +442,189 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 		check(endBuffers >= 10 && middleBuffers >= 10, "Expected both middle and end buffers: " + middleBuffers + " middle, " + endBuffers + " end");
 		check(sawForward && sawLeft, "Playback never pressed the recorded keys (forward " + sawForward + ", left " + sawLeft + ")");
 
-		context.getInput().pressKey(GLFW.GLFW_KEY_F9);
-		context.waitFor(client -> !LoopPlayer.isRunning());
+		context.runOnClient(client -> LoopPlayer.stop());
 		context.waitTick();
 		boolean anyHeld = context.computeOnClient(client -> client.options.keyUp.isDown() || client.options.keyLeft.isDown());
 		check(!anyHeld, "Stopping the loop left a movement key held");
 	}
 
-	/** With the setting on, the loop only advances while attack is held, and resumes in place after a release. */
+	/** In hold mode the loop only advances while left click is held, and resumes in place after a release. */
 	private static void holdLeftClickToRun(ClientGameTestContext context) {
-		context.runOnClient(client -> LoopSettings.setHoldAttackToRun(true));
+		context.runOnClient(client -> LoopSettings.setPlayMode(LoopSettings.PlayMode.HOLD));
 		context.getInput().pressKey(GLFW.GLFW_KEY_F9);
 		context.waitFor(client -> LoopPlayer.isRunning());
 		context.waitTicks(10);
-		check(context.computeOnClient(client -> LoopPlayer.isWaitingForAttack() && LoopPlayer.buffersRolled() == 0
+		check(context.computeOnClient(client -> LoopPlayer.isWaiting() && LoopPlayer.buffersRolled() == 0
 				&& !client.options.keyUp.isDown()), "Without left click the loop must stay paused at the start");
 
-		context.getInput().holdMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
+		FAKE_MOUSE.add(GLFW.GLFW_MOUSE_BUTTON_LEFT);
 		context.waitTicks(30);
 		int rolledWhileHeld = context.computeOnClient(client -> LoopPlayer.buffersRolled());
 		check(rolledWhileHeld > 0, "Holding left click did not run the loop");
 
-		context.getInput().releaseMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
+		FAKE_MOUSE.remove(GLFW.GLFW_MOUSE_BUTTON_LEFT);
 		context.waitTicks(2);
 		String pausedAt = context.computeOnClient(client -> LoopPlayer.buffersRolled() + "/" + LoopPlayer.describePosition().getString());
-		check(context.computeOnClient(client -> LoopPlayer.isWaitingForAttack()), "Releasing left click should pause the loop");
+		check(context.computeOnClient(client -> LoopPlayer.isWaiting()), "Releasing left click should pause the loop");
 		check(!context.computeOnClient(client -> client.options.keyUp.isDown() || client.options.keyLeft.isDown()),
 				"Pausing must let go of the movement keys");
 		context.waitTicks(20);
 		String stillAt = context.computeOnClient(client -> LoopPlayer.buffersRolled() + "/" + LoopPlayer.describePosition().getString());
 		check(pausedAt.equals(stillAt), "The loop moved on while paused: " + pausedAt + " -> " + stillAt);
 
-		context.getInput().holdMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
+		FAKE_MOUSE.add(GLFW.GLFW_MOUSE_BUTTON_LEFT);
 		context.waitTicks(30);
-		context.getInput().releaseMouse(GLFW.GLFW_MOUSE_BUTTON_LEFT);
+		FAKE_MOUSE.remove(GLFW.GLFW_MOUSE_BUTTON_LEFT);
 		check(context.computeOnClient(client -> LoopPlayer.buffersRolled()) > rolledWhileHeld, "The loop did not resume");
 
+		// In hold mode the loop key stops the loop (there is nothing to toggle).
 		context.getInput().pressKey(GLFW.GLFW_KEY_F9);
 		context.waitFor(client -> !LoopPlayer.isRunning());
-		context.runOnClient(client -> LoopSettings.setHoldAttackToRun(true));
+	}
+
+	/**
+	 * Keybind mode: a started loop plays without left click, the loop key pauses and resumes it in place, and while it
+	 * plays the game's "pause on lost focus" is switched off (that is what lets it keep going when tabbed out) and put back
+	 * afterwards.
+	 */
+	private static void keybindPlaysAndPauses(ClientGameTestContext context) {
+		context.runOnClient(client -> {
+			LoopSettings.setPlayMode(LoopSettings.PlayMode.KEYBIND);
+			LoopSettings.setBackgroundPlay(true);
+			client.options.pauseOnLostFocus = true;
+		});
+		context.getInput().pressKey(GLFW.GLFW_KEY_F9);
+		context.waitFor(client -> LoopPlayer.isRunning());
+		context.waitTicks(30);
+		check(context.computeOnClient(client -> LoopPlayer.isPlaying() && LoopPlayer.buffersRolled() > 0),
+				"A keybind-mode loop should play without holding left click");
+		check(context.computeOnClient(client -> LoopPlayer.isBackgroundPlayActive() && !client.options.pauseOnLostFocus),
+				"While playing, 'pause on lost focus' should be off so the loop survives tabbing out");
+
+		context.getInput().pressKey(GLFW.GLFW_KEY_F9);
+		context.waitTicks(3);
+		check(context.computeOnClient(client -> LoopPlayer.isRunning() && LoopPlayer.isWaiting()), "The loop key should pause the loop");
+		check(context.computeOnClient(client -> client.options.pauseOnLostFocus && !LoopPlayer.isBackgroundPlayActive()),
+				"Pausing should give 'pause on lost focus' back");
+		String pausedAt = context.computeOnClient(client -> LoopPlayer.buffersRolled() + "/" + LoopPlayer.describePosition().getString());
+		context.waitTicks(20);
+		check(pausedAt.equals(context.computeOnClient(client -> LoopPlayer.buffersRolled() + "/" + LoopPlayer.describePosition().getString())),
+				"The loop moved on while paused");
+		check(!context.computeOnClient(client -> client.options.keyUp.isDown() || client.options.keyLeft.isDown()),
+				"Pausing must let go of the movement keys");
+
+		context.getInput().pressKey(GLFW.GLFW_KEY_F9);
+		context.waitTicks(30);
+		check(context.computeOnClient(client -> LoopPlayer.isPlaying() && LoopPlayer.buffersRolled() > 0),
+				"The loop key should resume the loop");
+
+		// With the setting off, the game's option is left alone.
+		context.runOnClient(client -> LoopSettings.setBackgroundPlay(false));
+		context.waitTicks(3);
+		check(context.computeOnClient(client -> client.options.pauseOnLostFocus), "Background play off must leave 'pause on lost focus' on");
+
+		context.runOnClient(client -> {
+			LoopPlayer.stop();
+			LoopSettings.setBackgroundPlay(true);
+		});
+		context.waitTicks(2);
+		check(context.computeOnClient(client -> client.options.pauseOnLostFocus), "'pause on lost focus' was not restored");
+		context.runOnClient(client -> client.options.pauseOnLostFocus = false);
+	}
+
+	/**
+	 * A block with "Hold" on keeps its recording's last keys pressed through the buffer after it; a block without it
+	 * releases everything. Built through the editor's data model and saved like a real loop.
+	 */
+	private static void holdLastKeysThroughBuffer(ClientGameTestContext context) {
+		List<String> ids = context.computeOnClient(client -> RecordingStore.list().stream().map(Recording::id).toList());
+		String left = ids.get(0);
+		String forward = ids.get(1);
+		Loop saved = context.computeOnClient(client -> {
+			try {
+				Loop created = LoopStore.saveNew("Hold test",
+						List.of(new Loop.Step(forward, true), new Loop.Step(left, false)), 12, 16);
+				return LoopStore.get(created.id());
+			} catch (IOException e) {
+				throw new UncheckedIOException(e);
+			}
+		});
+		check(saved.steps().get(0).holdLastKeys() && !saved.steps().get(1).holdLastKeys(), "The hold flags did not survive saving: " + saved.steps());
+
+		context.runOnClient(client -> {
+			LoopSettings.setPlayMode(LoopSettings.PlayMode.KEYBIND);
+			LoopPlayer.start(saved);
+		});
+
+		int heldMiddleTicks = 0;
+		int releasedEndTicks = 0;
+		boolean sawMiddle = false;
+		for (int tick = 0; tick < 400 && (heldMiddleTicks < 30 || releasedEndTicks < 10); tick++) {
+			context.waitTick();
+			Object[] state = context.computeOnClient(client -> new Object[] {
+					LoopPlayer.describePosition().getString(), client.options.keyUp.isDown(), client.options.keyLeft.isDown()});
+			String position = (String) state[0];
+			if (position.startsWith("buffer ")) {
+				sawMiddle = true;
+				heldMiddleTicks++;
+				check((boolean) state[1], "Forward must stay held through the buffer after a Hold block (" + position + ")");
+				check(!(boolean) state[2], "Only the last keys of that recording are held, not left");
+			} else if (position.startsWith("end buffer ")) {
+				releasedEndTicks++;
+				check(!(boolean) state[1] && !(boolean) state[2], "A block without Hold must release everything in its buffer (" + position + ")");
+			}
+		}
+		check(sawMiddle && heldMiddleTicks >= 30 && releasedEndTicks >= 10,
+				"Did not observe both buffers (held " + heldMiddleTicks + ", released " + releasedEndTicks + ")");
+
+		context.runOnClient(client -> LoopPlayer.stop());
+		context.waitTick();
+		check(!context.computeOnClient(client -> client.options.keyUp.isDown()), "Stopping left the held key pressed");
+		context.runOnClient(client -> {
+			try {
+				LoopStore.delete(saved);
+			} catch (IOException e) {
+				throw new UncheckedIOException(e);
+			}
+			LoopSettings.setPlayMode(LoopSettings.PlayMode.HOLD);
+		});
+	}
+
+	/** Version 1 recording and loop files (written by the first release) must still load. */
+	private static void oldFilesStillLoad(ClientGameTestContext context) {
+		context.runOnClient(client -> {
+			try {
+				java.nio.file.Path recordings = RecordingStore.directory();
+				java.nio.file.Files.createDirectories(recordings);
+				java.nio.file.Files.writeString(recordings.resolve("legacy-1.json"), """
+						{ "version": 1, "name": "Legacy", "createdAt": "2025-01-01T00:00:00Z", "lengthTicks": 8,
+						  "events": [ { "tick": 0, "key": "forward", "down": true }, { "tick": 8, "key": "forward", "down": false } ] }
+						""");
+				java.nio.file.Path loops = LoopStore.directory();
+				java.nio.file.Files.createDirectories(loops);
+				java.nio.file.Files.writeString(loops.resolve("legacy-loop.json"), """
+						{ "version": 1, "name": "Legacy loop", "createdAt": "2025-01-01T00:00:00Z",
+						  "buffer": { "minTicks": 5, "maxTicks": 9 }, "recordings": [ "legacy-1" ] }
+						""");
+			} catch (IOException e) {
+				throw new UncheckedIOException(e);
+			}
+		});
+		Recording legacy = context.computeOnClient(client -> RecordingStore.list().stream().filter(r -> r.id().equals("legacy-1")).findFirst().orElse(null));
+		check(legacy != null, "A version 1 recording did not load");
+		check(legacy.usesInput(Recording.Type.KEY, GLFW.GLFW_KEY_W), "The legacy 'forward' key should map to W");
+		check(legacy.heldAtEnd().contains(new Recording.Input(Recording.Type.KEY, GLFW.GLFW_KEY_W)), "The legacy final release should count as held at the end");
+		Loop legacyLoop = context.computeOnClient(client -> LoopStore.get("legacy-loop"));
+		check(legacyLoop != null && legacyLoop.recordingIds().equals(List.of("legacy-1")) && !legacyLoop.steps().get(0).holdLastKeys(),
+				"A version 1 loop did not load");
+		context.runOnClient(client -> {
+			try {
+				RecordingStore.delete(legacy);
+				LoopStore.delete(legacyLoop);
+			} catch (IOException e) {
+				throw new UncheckedIOException(e);
+			}
+		});
 	}
 
 	/**
@@ -437,7 +632,7 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 	 * stops it, and the Reset button and {@code /ef loop reset} both send it back to cycle 1.
 	 */
 	private static void inventoryLoopButtons(ClientGameTestContext context) {
-		context.runOnClient(client -> LoopSettings.setHoldAttackToRun(false));
+		context.runOnClient(client -> LoopSettings.setPlayMode(LoopSettings.PlayMode.KEYBIND));
 
 		runChatCommand(context, "ef open loops");
 		context.waitForScreen(EasyFarmScreen.class);
@@ -533,9 +728,9 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 		check(context.computeOnClient(client -> LoopPlayer.cycle() == 1), "'/ef loop reset' did not reset the loop");
 		check(SERVER_MESSAGES.isEmpty(), "'/ef loop reset' was forwarded to the server: " + SERVER_MESSAGES);
 
-		context.getInput().pressKey(GLFW.GLFW_KEY_F9);
+		context.runOnClient(client -> LoopPlayer.stop());
 		context.waitFor(client -> !LoopPlayer.isRunning());
-		context.runOnClient(client -> LoopSettings.setHoldAttackToRun(true));
+		context.runOnClient(client -> LoopSettings.setPlayMode(LoopSettings.PlayMode.HOLD));
 	}
 
 	private static LoopBuilderWidget builder(Screen screen) {
@@ -557,7 +752,20 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 			try {
 				java.lang.reflect.Field field = LoopEditorScreen.class.getDeclaredField("sequence");
 				field.setAccessible(true);
-				return List.copyOf((List<String>) field.get(client.gui.screen()));
+				return ((List<Loop.Step>) field.get(client.gui.screen())).stream().map(Loop.Step::recordingId).toList();
+			} catch (ReflectiveOperationException e) {
+				throw new AssertionError(e);
+			}
+		});
+	}
+
+	@SuppressWarnings("unchecked")
+	private static List<Boolean> editorHolds(ClientGameTestContext context) {
+		return context.computeOnClient(client -> {
+			try {
+				java.lang.reflect.Field field = LoopEditorScreen.class.getDeclaredField("sequence");
+				field.setAccessible(true);
+				return ((List<Loop.Step>) field.get(client.gui.screen())).stream().map(Loop.Step::holdLastKeys).toList();
 			} catch (ReflectiveOperationException e) {
 				throw new AssertionError(e);
 			}
@@ -609,7 +817,9 @@ public class EasyFarmClientGameTest implements FabricClientGameTest {
 		runChatCommand(context, "ef record \"Cmd run\"");
 		context.waitFor(client -> Recorder.isRecording());
 		check("Cmd run".equals(context.computeOnClient(client -> Recorder.activeName())), "Wrong name for '/ef record'");
-		context.getInput().holdKeyFor(options -> options.keyUp, 10);
+		FAKE_KEYS.add(GLFW.GLFW_KEY_W);
+		context.waitTicks(10);
+		FAKE_KEYS.remove(GLFW.GLFW_KEY_W);
 		context.waitTicks(3);
 		context.takeScreenshot("command-4-recording-from-command");
 		runChatCommand(context, "ef stop");
